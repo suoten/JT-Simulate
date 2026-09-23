@@ -2,6 +2,7 @@ package simulate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -154,7 +155,7 @@ func (s *Simulator) EncodeMessage(protocol, msgID, phone string, fields map[stri
 		Fields:   fields,
 	})
 	if !resp.Success {
-		return "", fmt.Errorf(resp.Error)
+		return "", errors.New(resp.Error)
 	}
 	return resp.Hex, nil
 }
