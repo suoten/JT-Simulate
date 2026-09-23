@@ -58,12 +58,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
     - name: Build Docker image
-      run: |
-        set -x
-        docker version
-        echo "---"
-        docker build --no-cache --progress=plain -t jt-simulate . 2>&1 || {
-          echo "Docker build failed with exit code $?"
-          exit 1
-        }
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        push: false
+        tags: jt-simulate:latest
+        no-cache: true
