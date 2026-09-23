@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JT-Simulate — 部标协议仿真平台</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cdefs%3E%3ClinearGradient id='lg' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%234fc3f7'/%3E%3Cstop offset='100%25' stop-color='%230288d1'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M 65 50 L 65 120 Q 65 145 90 145 Q 115 145 115 120 L 115 110' fill='none' stroke='url(%23lg)' stroke-width='10' stroke-linecap='square' stroke-linejoin='miter'/%3E%3Cpath d='M 85 50 L 155 50' fill='none' stroke='url(%23lg)' stroke-width='10' stroke-linecap='square'/%3E%3Cpath d='M 120 50 L 120 145' fill='none' stroke='url(%23lg)' stroke-width='10' stroke-linecap='square'/%3E%3Ccircle cx='120' cy='50' r='8' fill='%234fc3f7'/%3E%3Ccircle cx='120' cy='50' r='4' fill='%230f1419'/%3E%3Cline x1='50' y1='165' x2='150' y2='165' stroke='url(%23lg)' stroke-width='2' opacity='0.4'/%3E%3Cpath d='M 40 40 L 40 25 L 55 25' fill='none' stroke='%234fc3f7' stroke-width='2' opacity='0.5'/%3E%3Cpath d='M 160 40 L 160 25 L 145 25' fill='none' stroke='%234fc3f7' stroke-width='2' opacity='0.5'/%3E%3Cpath d='M 40 160 L 40 175 L 55 175' fill='none' stroke='%234fc3f7' stroke-width='2' opacity='0.5'/%3E%3Cpath d='M 160 160 L 160 175 L 145 175' fill='none' stroke='%234fc3f7' stroke-width='2' opacity='0.5'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="app">
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <div class="sidebar-logo">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+                    <defs>
+                        <linearGradient id="logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="#4fc3f7"/><stop offset="100%" stop-color="#0288d1"/>
+                        </linearGradient>
+                    </defs>
+                    <path d="M 65 50 L 65 120 Q 65 145 90 145 Q 115 145 115 120 L 115 110" fill="none" stroke="url(#logo-grad)" stroke-width="10" stroke-linecap="square" stroke-linejoin="miter"/>
+                    <path d="M 85 50 L 155 50" fill="none" stroke="url(#logo-grad)" stroke-width="10" stroke-linecap="square"/>
+                    <path d="M 120 50 L 120 145" fill="none" stroke="url(#logo-grad)" stroke-width="10" stroke-linecap="square"/>
+                    <circle cx="120" cy="50" r="8" fill="#4fc3f7"/>
+                    <circle cx="120" cy="50" r="4" fill="#0f1419"/>
+                    <line x1="50" y1="165" x2="150" y2="165" stroke="url(#logo-grad)" stroke-width="2" opacity="0.4"/>
+                    <path d="M 40 40 L 40 25 L 55 25" fill="none" stroke="#4fc3f7" stroke-width="2" opacity="0.5"/>
+                    <path d="M 160 40 L 160 25 L 145 25" fill="none" stroke="#4fc3f7" stroke-width="2" opacity="0.5"/>
+                    <path d="M 40 160 L 40 175 L 55 175" fill="none" stroke="#4fc3f7" stroke-width="2" opacity="0.5"/>
+                    <path d="M 160 160 L 160 175 L 145 175" fill="none" stroke="#4fc3f7" stroke-width="2" opacity="0.5"/>
+                </svg>
+            </div>
+            <div class="title-block">
+                <h1>JT-Simulate</h1>
+                <p>部标协议仿真平台 v1.0</p>
+            </div>
+        </div>
+        <div class="nav-section">
+            <div class="nav-item active" data-page="dashboard">
+                <span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg></span>
+                <span class="nav-text">仪表盘</span>
+            </div>
+            <div class="nav-item" data-page="workshop">
+                <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 1-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 1 5.4-5.4l-3 3L13 10.7l1.7-4.4z"/></svg></span>
+                <span class="nav-text">报文工坊</span>
+            </div>
+            <div class="nav-item" data-page="devices">
+                <span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg></span>
+                <span class="nav-text">设备管理</span>
+            </div>
+            <div class="nav-item" data-page="monitor">
+                <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M2 12h2m4 0h2m4 0h2m4 0h2"/><path d="M6 8a4 4 0 0 1 0 8m12-8a4 4 0 0 0 0 8m-9-9a8 8 0 0 1 6 0m-6 10a8 8 0 0 0 6 0"/></svg></span>
+                <span class="nav-text">消息监控</span>
+            </div>
+            <div class="nav-item" data-page="stress">
+                <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></span>
+                <span class="nav-text">压力测试</span>
+            </div>
+            <div class="nav-item" data-page="scenario">
+                <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 4v16"/></svg></span>
+                <span class="nav-text">场景模拟</span>
+            </div>
+            <div class="nav-item" data-page="checker">
+                <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg></span>
+                <span class="nav-text">合规检查</span>
+            </div>
+            <div class="nav-item" data-page="settings">
+                <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10l2 2M5 19l2-2m10-10l2-2"/></svg></span>
+                <span class="nav-text">设置</span>
+            </div>
+        </div>
+        <div class="sidebar-footer">
+            <span class="dot"></span>
+            <span>系统运行中</span>
+        </div>
+    </div>
+    <div class="main">
+        <div id="page-dashboard" class="page"></div>
+        <div id="page-workshop" class="page hidden"></div>
+        <div id="page-devices" class="page hidden"></div>
+        <div id="page-monitor" class="page hidden"></div>
+        <div id="page-stress" class="page hidden"></div>
+        <div id="page-scenario" class="page hidden"></div>
+        <div id="page-checker" class="page hidden"></div>
+        <div id="page-settings" class="page hidden"></div>
+    </div>
+</div>
+<script src="msgdata.js"></script>
+<script src="app-core.js"></script>
+<script src="app-pages.js"></script>
+</body>
+</html>

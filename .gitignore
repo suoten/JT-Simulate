@@ -14,9 +14,9 @@
 *.test
 *.out
 
-# Wails 编译产物
-build/
-dist/
+# Wails 编译产物（仅根目录）
+/build/
+/dist/
 
 # 依赖
 vendor/

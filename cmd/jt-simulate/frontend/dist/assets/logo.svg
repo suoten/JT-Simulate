@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="lg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4fc3f7"/>
+      <stop offset="100%" stop-color="#0288d1"/>
+    </linearGradient>
+  </defs>
+  <path d="M 65 50 L 65 120 Q 65 145 90 145 Q 115 145 115 120 L 115 110" fill="none" stroke="url(#lg)" stroke-width="10" stroke-linecap="square" stroke-linejoin="miter"/>
+  <path d="M 85 50 L 155 50" fill="none" stroke="url(#lg)" stroke-width="10" stroke-linecap="square"/>
+  <path d="M 120 50 L 120 145" fill="none" stroke="url(#lg)" stroke-width="10" stroke-linecap="square"/>
+  <circle cx="120" cy="50" r="8" fill="#4fc3f7"/>
+  <circle cx="120" cy="50" r="4" fill="#0f1419"/>
+  <line x1="50" y1="165" x2="150" y2="165" stroke="url(#lg)" stroke-width="2" opacity="0.4"/>
+  <path d="M 40 40 L 40 25 L 55 25" fill="none" stroke="#4fc3f7" stroke-width="2" opacity="0.5"/>
+  <path d="M 160 40 L 160 25 L 145 25" fill="none" stroke="#4fc3f7" stroke-width="2" opacity="0.5"/>
+  <path d="M 40 160 L 40 175 L 55 175" fill="none" stroke="#4fc3f7" stroke-width="2" opacity="0.5"/>
+  <path d="M 160 160 L 160 175 L 145 175" fill="none" stroke="#4fc3f7" stroke-width="2" opacity="0.5"/>
+</svg>
