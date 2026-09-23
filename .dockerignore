@@ -1,0 +1,40 @@
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+.catpaw/
+
+# Build artifacts
+release/
+build/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Documentation
+*.md
+docs/
+
+# Docker
+Dockerfile
+.dockerignore
+
+# CI
+.github/
+
+# Logs
+*.log
+
+# Database
+*.db
+*.sqlite
+
+# System files
+.DS_Store
+Thumbs.db
+desktop.ini
