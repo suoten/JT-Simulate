@@ -1,0 +1,26 @@
+server:
+  host: "0.0.0.0"
+  port: 8095
+  mode: release  # 生产环境使用 release 模式
+
+log:
+  level: info
+  format: console
+  output: stdout
+  dir: "~/.jt-simulate/logs"
+
+storage:
+  type: sqlite
+  path: "~/.jt-simulate/jt-simulate.db"
+
+simulator:
+  default_protocol: jt808
+  heartbeat_interval: 60
+  location_interval: 30
+  reconnect_interval: 15
+
+targets:
+  - name: default
+    protocol: jt808
+    address: "127.0.0.1:7611"
+    active: true

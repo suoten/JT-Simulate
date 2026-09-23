@@ -1,0 +1,40 @@
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Go 编译产物
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Wails 编译产物
+build/
+dist/
+
+# 依赖
+vendor/
+
+# 规划文档（不公开）
+JT-Simulate-规划文档.md
+
+# 数据库文件
+*.db
+*.sqlite
+
+# 日志
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# CatPaw
+.catpaw/

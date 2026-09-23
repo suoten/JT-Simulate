@@ -1,0 +1,19 @@
+{
+  "name": "JT-Simulate",
+  "outputfilename": "jt-simulate",
+  "frontend:dir": "cmd/jt-simulate/frontend/dist",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "author": {
+    "name": "硕腾网络",
+    "email": ""
+  },
+  "info": {
+    "productName": "JT-Simulate",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright © 2024 硕腾网络",
+    "comments": "部标协议仿真平台"
+  }
+}
