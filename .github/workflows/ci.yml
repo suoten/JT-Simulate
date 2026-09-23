@@ -58,10 +58,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
-    - name: Debug Docker info
-      run: |
-        docker version
-        docker info
-        ls -la .dockerignore Dockerfile
     - name: Build Docker image
-      run: docker build --progress=plain -t jt-simulate .
+      run: |
+        set -x
+        docker version
+        echo "---"
+        docker build --no-cache --progress=plain -t jt-simulate . 2>&1 || {
+          echo "Docker build failed with exit code $?"
+          exit 1
+        }
