@@ -58,5 +58,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
+    - name: Debug Docker info
+      run: |
+        docker version
+        docker info
+        ls -la .dockerignore Dockerfile
     - name: Build Docker image
-      run: DOCKER_BUILDKIT=1 docker build --progress=plain -t jt-simulate .
+      run: docker build --progress=plain -t jt-simulate .
