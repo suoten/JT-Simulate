@@ -36,5 +36,8 @@ JT-Simulate-规划文档.md
 Thumbs.db
 desktop.ini
 
+# 发布产物
+release/
+
 # CatPaw
 .catpaw/
