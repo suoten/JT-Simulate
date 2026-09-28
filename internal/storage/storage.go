@@ -87,26 +87,33 @@ func (s *JSONStorage) LoadDevices() ([]*base.DeviceConfig, error) {
 		if backupErr == nil {
 			if json.Unmarshal(backupData, &devices) == nil {
 				logger.Info("从备份恢复设备列表成功", "count", len(devices))
-				// 恢复后写回主文件
-				go func() {
-					s.mu.Lock()
-					defer s.mu.Unlock()
-					_ = os.WriteFile(s.path, backupData, 0644)
-				}()
+				// 恢复后异步写回主文件（不持有锁，避免锁升级死锁）
+				go s.writeBackup(data)
+				go s.writeBackupToMain(backupData)
 				return devices, nil
 			}
 		}
 		return nil, fmt.Errorf("unmarshal devices: %w", err)
 	}
 
-	// 加载成功后自动创建备份
-	go func() {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		_ = os.WriteFile(s.path+".bak", data, 0644)
-	}()
+	// 加载成功后异步创建备份（不持有锁）
+	go s.writeBackup(data)
 
 	return devices, nil
+}
+
+// writeBackup 异步创建备份文件（独立获取锁）
+func (s *JSONStorage) writeBackup(data []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_ = os.WriteFile(s.path+".bak", data, 0644)
+}
+
+// writeBackupToMain 异步将备份数据写回主文件（独立获取锁）
+func (s *JSONStorage) writeBackupToMain(data []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_ = os.WriteFile(s.path, data, 0644)
 }
 
 // Clear 清空存储

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/suoten/jt-simulate/internal/checker"
@@ -302,8 +303,9 @@ func (h *Handler) RunScenario(c *gin.Context) {
 		// 场景设备发送的消息不计入引擎统计
 	})
 
-	ctx := context.Background()
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Minute)
 	if err := sim.Online(ctx); err != nil {
+		cancelCtx()
 		c.JSON(http.StatusOK, gin.H{"success": false, "error": fmt.Sprintf("设备连接失败: %v", err)})
 		return
 	}
@@ -311,6 +313,7 @@ func (h *Handler) RunScenario(c *gin.Context) {
 	// 异步执行场景步骤
 	go func() {
 		defer sim.Offline()
+		defer cancelCtx()
 
 		err := h.scenarioEngine.Run(ctx, req.Name, func(step *engine.ScenarioStep) error {
 			logger.Info("场景步骤", "name", step.Name, "action", step.Action)

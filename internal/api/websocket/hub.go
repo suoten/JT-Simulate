@@ -17,16 +17,22 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// clientEntry 单个 WebSocket 客户端（带写锁保护并发写）
+type clientEntry struct {
+	conn   *websocket.Conn
+	writeMu sync.Mutex // 保护 WriteJSON 的并发访问
+}
+
 // Hub WebSocket Hub，管理所有WebSocket连接并广播消息
 type Hub struct {
 	mu      sync.RWMutex
-	clients map[*websocket.Conn]bool
+	clients map[*clientEntry]bool
 }
 
 // New 创建Hub
 func NewHub() *Hub {
 	return &Hub{
-		clients: make(map[*websocket.Conn]bool),
+		clients: make(map[*clientEntry]bool),
 	}
 }
 
@@ -38,13 +44,15 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	entry := &clientEntry{conn: conn}
+
 	h.mu.Lock()
-	h.clients[conn] = true
+	h.clients[entry] = true
 	h.mu.Unlock()
 
 	defer func() {
 		h.mu.Lock()
-		delete(h.clients, conn)
+		delete(h.clients, entry)
 		h.mu.Unlock()
 		conn.Close()
 	}()
@@ -60,18 +68,21 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 // Broadcast 广播消息给所有连接的客户端
 func (h *Hub) Broadcast(msg interface{}) {
 	h.mu.RLock()
-	clients := make([]*websocket.Conn, 0, len(h.clients))
+	clients := make([]*clientEntry, 0, len(h.clients))
 	for c := range h.clients {
 		clients = append(clients, c)
 	}
 	h.mu.RUnlock()
 
 	for _, client := range clients {
-		if err := client.WriteJSON(msg); err != nil {
+		client.writeMu.Lock()
+		err := client.conn.WriteJSON(msg)
+		client.writeMu.Unlock()
+		if err != nil {
 			h.mu.Lock()
 			delete(h.clients, client)
 			h.mu.Unlock()
-			client.Close()
+			client.conn.Close()
 		}
 	}
 }

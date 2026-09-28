@@ -89,6 +89,7 @@ type Simulator struct {
 	connMu     sync.RWMutex
 	seqNum     uint16
 	seqMu      sync.Mutex
+	cancelMu   sync.Mutex
 	cancel     context.CancelFunc
 	ctx        context.Context
 	wg         sync.WaitGroup
@@ -221,11 +222,20 @@ func (s *Simulator) connectAndRun(ctx context.Context) error {
 	s.connMu.Unlock()
 	s.SetState(StateOnline)
 
-	// 启动接收循环
-	ctx, s.cancel = context.WithCancel(ctx)
-	s.ctx = ctx
+	// 创建可取消的子 context，用于控制 recvLoop 等后续 goroutine
+	internalCtx, internalCancel := context.WithCancel(ctx)
+
+	s.cancelMu.Lock()
+	// 如果有旧的 cancel（重连场景），先取消旧的
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.cancel = internalCancel
+	s.ctx = internalCtx
+	s.cancelMu.Unlock()
+
 	s.wg.Add(1)
-	go s.recvLoop(ctx)
+	go s.recvLoop(internalCtx)
 
 	return nil
 }
@@ -289,9 +299,12 @@ func (s *Simulator) StartReconnectLoop(ctx context.Context, onReconnect func(ctx
 func (s *Simulator) Disconnect() {
 	s.SetState(StateClosing)
 
+	s.cancelMu.Lock()
 	if s.cancel != nil {
 		s.cancel()
+		s.cancel = nil
 	}
+	s.cancelMu.Unlock()
 
 	s.connMu.Lock()
 	if s.conn != nil {

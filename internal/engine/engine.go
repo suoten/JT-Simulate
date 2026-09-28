@@ -132,6 +132,8 @@ func (e *Engine) SaveDevices() error {
 
 // SetBroadcast 设置消息广播函数（由API层注入WebSocket Hub）
 func (e *Engine) SetBroadcast(fn BroadcastFunc) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.broadcast = fn
 }
 
@@ -213,20 +215,26 @@ func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
 	protocol := info.Config.Protocol
 	sim.SetOnSend(func(data []byte) {
 		atomic.AddInt64(&e.stats.TotalMessages, 1)
-		if e.broadcast != nil {
+		e.mu.RLock()
+		bc := e.broadcast
+		e.mu.RUnlock()
+		if bc != nil {
 			codec := jt808.NewCodec()
 			if msg, err := codec.Decode(data); err == nil {
 				msgName := jt808.MsgName(msg.Header.MsgID)
-				e.broadcast("up", phone, msgName,
+				bc("up", phone, msgName,
 					fmt.Sprintf("0x%04X", msg.Header.MsgID), data)
 			} else {
-				e.broadcast("up", phone, protocol, "", data)
+				bc("up", phone, protocol, "", data)
 			}
 		}
 	})
 
 	sim.WrapOnRawRecv(func(data []byte) {
-		if e.broadcast != nil {
+		e.mu.RLock()
+		bc := e.broadcast
+		e.mu.RUnlock()
+		if bc != nil {
 			codec := jt808.NewCodec()
 			frames := jt808.SplitByDelimiter(data)
 			if len(frames) == 0 {
@@ -235,10 +243,10 @@ func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
 			for _, frame := range frames {
 				if msg, err := codec.Decode(frame); err == nil {
 					msgName := jt808.MsgName(msg.Header.MsgID)
-					e.broadcast("down", phone, msgName,
+					bc("down", phone, msgName,
 						fmt.Sprintf("0x%04X", msg.Header.MsgID), frame)
 				} else {
-					e.broadcast("down", phone, "未知", "", frame)
+					bc("down", phone, "未知", "", frame)
 				}
 			}
 		}
