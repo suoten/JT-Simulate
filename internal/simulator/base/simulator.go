@@ -3,13 +3,13 @@ package base
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/suoten/jt-simulate/internal/logger"
 	"github.com/suoten/jt-simulate/pkg/types"
 )
 
@@ -232,19 +232,19 @@ func (s *Simulator) StartReconnectLoop(ctx context.Context, onReconnect func(ctx
 				if s.State() != StateOffline {
 					continue
 				}
-				log.Printf("[%s] 尝试重连 %s", s.config.Phone, s.config.TargetAddr)
+				logger.Info("尝试重连", "phone", s.config.Phone, "target", s.config.TargetAddr)
 				if err := s.connectAndRun(ctx); err != nil {
-					log.Printf("[%s] 重连失败: %v", s.config.Phone, err)
+					logger.Error("重连失败", "phone", s.config.Phone, "error", err)
 					continue
 				}
 				if onReconnect != nil {
 					if err := onReconnect(ctx); err != nil {
-						log.Printf("[%s] 重连后重新上线失败: %v", s.config.Phone, err)
+						logger.Error("重连后重新上线失败", "phone", s.config.Phone, "error", err)
 						s.Disconnect()
 						continue
 					}
 				}
-				log.Printf("[%s] 重连成功", s.config.Phone)
+				logger.Info("重连成功", "phone", s.config.Phone)
 			} else {
 				select {
 				case <-ctx.Done():

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/suoten/jt-simulate/internal/logger"
 	"github.com/suoten/jt-simulate/internal/simulator/base"
 	gbt32960sim "github.com/suoten/jt-simulate/internal/simulator/gbt32960"
 	jt808sim "github.com/suoten/jt-simulate/internal/simulator/jt808"
@@ -38,9 +39,19 @@ type Engine struct {
 
 // DeviceInfo 设备信息
 type DeviceInfo struct {
-	Config   *base.DeviceConfig
+	Config    *base.DeviceConfig
 	Simulator interface{} // Simulator 接口实现
-	State    base.DeviceState
+	state     atomic.Int32 // 使用 atomic 保护状态访问
+}
+
+// State 获取设备状态（线程安全）
+func (d *DeviceInfo) State() base.DeviceState {
+	return base.DeviceState(d.state.Load())
+}
+
+// setState 设置设备状态（线程安全）
+func (d *DeviceInfo) setState(s base.DeviceState) {
+	d.state.Store(int32(s))
 }
 
 // EngineStats 引擎统计
@@ -75,16 +86,21 @@ func (e *Engine) LoadDevices() error {
 	for _, cfg := range devices {
 		sim, err := createSimulator(cfg)
 		if err != nil {
-			continue // 跳过无法创建的设备
+			logger.Warn("跳过无法创建的设备", "device_id", cfg.ID, "error", err)
+			continue
 		}
 		e.mu.Lock()
-		e.devices[cfg.ID] = &DeviceInfo{
+		info := &DeviceInfo{
 			Config:    cfg,
 			Simulator: sim,
-			State:     base.StateOffline,
 		}
+		info.setState(base.StateOffline)
+		e.devices[cfg.ID] = info
 		e.mu.Unlock()
 		atomic.AddInt64(&e.stats.TotalDevices, 1)
+	}
+	if len(devices) > 0 {
+		logger.Info("从持久化存储加载设备", "count", len(devices))
 	}
 	return nil
 }
@@ -100,7 +116,11 @@ func (e *Engine) SaveDevices() error {
 	for _, info := range e.devices {
 		list = append(list, info.Config)
 	}
-	return e.storage.SaveDevices(list)
+	if err := e.storage.SaveDevices(list); err != nil {
+		logger.Error("保存设备列表失败", "error", err)
+		return err
+	}
+	return nil
 }
 
 // SetBroadcast 设置消息广播函数（由API层注入WebSocket Hub）
@@ -112,12 +132,10 @@ func (e *Engine) SetBroadcast(fn BroadcastFunc) {
 func createSimulator(cfg *base.DeviceConfig) (Simulator, error) {
 	switch cfg.Protocol {
 	case "jt808", "jt1078", "jt905", "jt1045", "jt1253":
-		// 这些协议都使用 JT808 帧格式，JT808 仿真器即可处理
 		return jt808sim.New(cfg), nil
 	case "gbt32960":
 		return gbt32960sim.New(cfg), nil
 	case "jt809":
-		// JT809 是平台间协议，使用 JT808 仿真器作为基础（平台间协议的仿真场景较少）
 		return jt808sim.New(cfg), nil
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", cfg.Protocol)
@@ -139,16 +157,17 @@ func (e *Engine) CreateDevice(cfg *base.DeviceConfig) error {
 	}
 
 	info := &DeviceInfo{
-		Config:   cfg,
+		Config:    cfg,
 		Simulator: sim,
-		State:    base.StateOffline,
 	}
+	info.setState(base.StateOffline)
 	e.devices[cfg.ID] = info
 	atomic.AddInt64(&e.stats.TotalDevices, 1)
 
 	// 持久化
 	go e.SaveDevices()
 
+	logger.Info("设备已创建", "device_id", cfg.ID, "protocol", cfg.Protocol)
 	return nil
 }
 
@@ -162,8 +181,8 @@ func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
 		return fmt.Errorf("device %s not found", deviceID)
 	}
 
-	// 如果设备已经在线，不要重复启动
-	if info.State == base.StateOnline || info.State == base.StateConnecting {
+	// 使用 atomic 读取状态，避免数据竞争
+	if info.State() == base.StateOnline || info.State() == base.StateConnecting {
 		return fmt.Errorf("device %s is already running", deviceID)
 	}
 
@@ -172,25 +191,22 @@ func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
 		return fmt.Errorf("simulator does not implement Simulator interface")
 	}
 
+	deviceIDCopy := deviceID
 	sim.SetOnState(func(state base.DeviceState) {
-		e.mu.Lock()
-		info.State = state
+		info.setState(state)
 		if state == base.StateOnline {
 			atomic.AddInt64(&e.stats.OnlineDevices, 1)
 		} else if state == base.StateOffline {
-			// 只在之前是在线状态时才减1，避免负数
 			cur := atomic.LoadInt64(&e.stats.OnlineDevices)
 			if cur > 0 {
 				atomic.AddInt64(&e.stats.OnlineDevices, -1)
 			}
 		}
-		e.mu.Unlock()
+		logger.Debug("设备状态变更", "device_id", deviceIDCopy, "state", state.String())
 	})
-	// 设置发送回调——广播到WebSocket用于实时监控 + 计入消息统计
 	sim.SetOnSend(func(data []byte) {
 		atomic.AddInt64(&e.stats.TotalMessages, 1)
 		if e.broadcast != nil {
-			// 尝试解码消息名称
 			codec := jt808.NewCodec()
 			if msg, err := codec.Decode(data); err == nil {
 				msgName := jt808.MsgName(msg.Header.MsgID)
@@ -201,7 +217,6 @@ func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
 			}
 		}
 	})
-	// 设置接收回调——广播平台下发的消息
 	sim.SetOnRawRecv(func(data []byte) {
 		if e.broadcast != nil {
 			codec := jt808.NewCodec()
@@ -220,6 +235,8 @@ func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
 			}
 		}
 	})
+
+	logger.Info("启动设备", "device_id", deviceID, "target", info.Config.TargetAddr)
 	return sim.Online(ctx)
 }
 
@@ -233,8 +250,7 @@ func (e *Engine) StopDevice(deviceID string) error {
 		return fmt.Errorf("device %s not found", deviceID)
 	}
 
-	// 如果设备已经离线，不需要重复停止
-	if info.State == base.StateOffline {
+	if info.State() == base.StateOffline {
 		return nil
 	}
 
@@ -243,6 +259,7 @@ func (e *Engine) StopDevice(deviceID string) error {
 		return fmt.Errorf("simulator does not implement Simulator interface")
 	}
 	sim.Offline()
+	logger.Info("停止设备", "device_id", deviceID)
 	return nil
 }
 
@@ -256,12 +273,10 @@ func (e *Engine) DeleteDevice(deviceID string) error {
 		return fmt.Errorf("device %s not found", deviceID)
 	}
 
-	// 先停止
-	if info.State != base.StateOffline {
+	if info.State() != base.StateOffline {
 		if sim, ok := info.Simulator.(Simulator); ok {
 			sim.Offline()
 		}
-		// 减少在线设备计数
 		cur := atomic.LoadInt64(&e.stats.OnlineDevices)
 		if cur > 0 {
 			atomic.AddInt64(&e.stats.OnlineDevices, -1)
@@ -271,9 +286,9 @@ func (e *Engine) DeleteDevice(deviceID string) error {
 	delete(e.devices, deviceID)
 	atomic.AddInt64(&e.stats.TotalDevices, -1)
 
-	// 持久化
 	go e.SaveDevices()
 
+	logger.Info("删除设备", "device_id", deviceID)
 	return nil
 }
 
@@ -310,14 +325,37 @@ func (e *Engine) GetStats() EngineStats {
 	}
 }
 
-// StopAll 停止所有设备
+// StopAll 停止所有设备（优雅关闭）
 func (e *Engine) StopAll() {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
+	count := 0
 	for _, info := range e.devices {
-		if sim, ok := info.Simulator.(Simulator); ok {
-			sim.Offline()
+		if info.State() != base.StateOffline {
+			if sim, ok := info.Simulator.(Simulator); ok {
+				sim.Offline()
+				count++
+			}
 		}
 	}
+	if count > 0 {
+		logger.Info("已停止所有在线设备", "count", count)
+	}
+
+	// 保存设备列表
+	if e.storage != nil {
+		if err := e.storage.SaveDevices(e.deviceListLocked()); err != nil {
+			logger.Error("关闭时保存设备列表失败", "error", err)
+		}
+	}
+}
+
+// deviceListLocked 在已持锁的情况下获取设备列表
+func (e *Engine) deviceListLocked() []*base.DeviceConfig {
+	list := make([]*base.DeviceConfig, 0, len(e.devices))
+	for _, info := range e.devices {
+		list = append(list, info.Config)
+	}
+	return list
 }

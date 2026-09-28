@@ -3,9 +3,9 @@ package gbt32960
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
+	"github.com/suoten/jt-simulate/internal/logger"
 	"github.com/suoten/jt-simulate/internal/simulator/base"
 	gbt32960 "github.com/suoten/jt-simulate/pkg/codec/gbt32960"
 )
@@ -136,6 +136,6 @@ func (s *Simulator) sendRealtimeInfo() error {
 
 // SendAlarm 发送故障报警
 func (s *Simulator) SendAlarm(alarmFlag uint16) error {
-	log.Printf("[%s] GBT32960 报警: 0x%04X", s.Config().Phone, alarmFlag)
+	logger.Warn("GBT32960报警", "phone", s.Config().Phone, "alarm", fmt.Sprintf("0x%04X", alarmFlag))
 	return nil
 }

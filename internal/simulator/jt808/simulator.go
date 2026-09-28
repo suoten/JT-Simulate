@@ -3,9 +3,9 @@ package jt808
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
+	"github.com/suoten/jt-simulate/internal/logger"
 	"github.com/suoten/jt-simulate/internal/simulator/base"
 	"github.com/suoten/jt-simulate/pkg/codec/jt808"
 	"github.com/suoten/jt-simulate/pkg/types"
@@ -111,7 +111,7 @@ func (s *Simulator) autoRespond(msg *types.Message) {
 		if regResp, ok := msg.Body.(*jt808.RegisterRespMessage); ok {
 			if regResp.Result == 0 && regResp.AuthCode != "" {
 				cfg.AuthCode = regResp.AuthCode
-				log.Printf("[%s] 注册成功，鉴权码: %s", cfg.Phone, regResp.AuthCode)
+				logger.Info("注册成功", "phone", cfg.Phone, "auth_code", regResp.AuthCode)
 			}
 		}
 		return
@@ -213,11 +213,11 @@ Speed:     uint16(s.CurSpeed() * 10),
 func (s *Simulator) sendResp(header *types.MessageHeader, body types.MessageBody) {
 	data, err := s.codec.Encode(header, body)
 	if err != nil {
-		log.Printf("[%s] 编码应答失败: %v", s.Config().Phone, err)
+			logger.Error("编码应答失败", "phone", s.Config().Phone, "error", err)
 		return
 	}
 	if err := s.Send(data); err != nil {
-		log.Printf("[%s] 发送应答失败: %v", s.Config().Phone, err)
+			logger.Error("发送应答失败", "phone", s.Config().Phone, "error", err)
 	}
 }
 

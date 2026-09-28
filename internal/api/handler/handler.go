@@ -9,11 +9,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/suoten/jt-simulate/internal/checker"
 	"github.com/suoten/jt-simulate/internal/engine"
+	"github.com/suoten/jt-simulate/internal/logger"
 	gbt32960sim "github.com/suoten/jt-simulate/internal/simulator/gbt32960"
 	jt808sim "github.com/suoten/jt-simulate/internal/simulator/jt808"
 	"github.com/suoten/jt-simulate/internal/simulator/base"
 	"github.com/suoten/jt-simulate/internal/workshop"
-	"github.com/suoten/jt-simulate/pkg/types"
 )
 
 // Handler API处理器
@@ -115,7 +115,7 @@ func (h *Handler) ListDevices(c *gin.Context) {
 			"protocol":   d.Config.Protocol,
 			"phone":      d.Config.Phone,
 			"plate":      d.Config.Plate,
-			"state":      d.State.String(),
+			"state":      d.State().String(),
 			"target":     d.Config.TargetAddr,
 			"interval":   d.Config.LocationInterval,
 			"heartbeat":  d.Config.HeartbeatInterval,
@@ -152,7 +152,7 @@ func (h *Handler) GetDevice(c *gin.Context) {
 		"protocol": info.Config.Protocol,
 		"phone":    info.Config.Phone,
 		"plate":    info.Config.Plate,
-		"state":    info.State.String(),
+		"state":    info.State().String(),
 		"target":   info.Config.TargetAddr,
 		"config":   info.Config,
 	})
@@ -264,6 +264,7 @@ func (h *Handler) RunScenario(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
+	_ = scenario // scenario is used below via scenario.Protocol
 
 	// 确定目标地址
 	targetAddr := req.Target
@@ -319,13 +320,12 @@ func (h *Handler) RunScenario(c *gin.Context) {
 		defer sim.Offline()
 
 		err := h.scenarioEngine.Run(ctx, req.Name, func(step *engine.ScenarioStep) error {
-			fmt.Printf("[场景] %s: %s (action=%s)\n", step.Name, step.Action, step.Params)
+			logger.Info("场景步骤", "name", step.Name, "action", step.Action)
 
 			switch step.Action {
 			case "send":
 				msgIDStr, _ := step.Params["msg_id"].(string)
-				fmt.Printf("[场景] 发送消息 %s\n", msgIDStr)
-				// 仿真器已在 Online 中自动注册/鉴权，这里不需要额外操作
+				logger.Debug("场景发送消息", "msg_id", msgIDStr)
 
 			case "location":
 				speedF, _ := step.Params["speed"].(float64)
@@ -337,19 +337,21 @@ func (h *Handler) RunScenario(c *gin.Context) {
 				lat, _ := step.Params["lat"].(float64)
 				lon, _ := step.Params["lon"].(float64)
 
-				// 如果指定了经纬度，更新设备位置
-				if lat != 0 && lon != 0 {
-					sim.(*jt808sim.Simulator).SetSpeed(speedF)
-					sim.(*jt808sim.Simulator).SetDirection(180)
-				} else {
-					// 使用默认位置 + 速度
-					sim.(*jt808sim.Simulator).SetSpeed(speedF)
-				}
+			// 使用类型断言安全检查，避免 panic
+			s, ok := sim.(*jt808sim.Simulator)
+			if !ok {
+				logger.Warn("场景步骤跳过：非JT808仿真器不支持位置操作", "protocol", scenario.Protocol)
+				break
+			}
+			if lat != 0 && lon != 0 {
+				s.SetSpeed(speedF)
+				s.SetDirection(180)
+			} else {
+				s.SetSpeed(speedF)
+			}
 
-				// 手动发送一条位置上报
-				if s, ok := sim.(*jt808sim.Simulator); ok {
-					s.SendLocation(s.CurLat(), s.CurLon(), uint16(speedF*10), 180)
-				}
+			// 手动发送一条位置上报
+			s.SendLocation(s.CurLat(), s.CurLon(), uint16(speedF*10), 180)
 
 			case "alarm":
 				alarmType, _ := step.Params["type"].(string)
@@ -375,14 +377,14 @@ func (h *Handler) RunScenario(c *gin.Context) {
 				sim.Offline()
 
 			default:
-				fmt.Printf("[场景] 未知 action: %s\n", step.Action)
+				logger.Warn("场景未知action", "action", step.Action)
 			}
 			return nil
 		})
 		if err != nil {
-			fmt.Printf("[场景] 运行出错: %v\n", err)
+			logger.Error("场景运行出错", "scenario", req.Name, "error", err)
 		} else {
-			fmt.Printf("[场景] %s 运行完成\n", req.Name)
+			logger.Info("场景运行完成", "scenario", req.Name)
 		}
 	}()
 
@@ -457,11 +459,10 @@ func (h *Handler) RunStress(c *gin.Context) {
 	go func() {
 		result, err := h.stressEngine.Run(context.Background(), &cfg)
 		if err != nil {
-			fmt.Printf("[压测] 错误: %v\n", err)
+			logger.Error("压测运行错误", "error", err)
 			return
 		}
-		fmt.Printf("[压测] 完成: 设备=%d, 消息=%d, 错误=%d\n",
-			result.OnlineDevices, result.TotalMessages, result.ErrorCount)
+		logger.Info("压测完成", "online", result.OnlineDevices, "messages", result.TotalMessages, "errors", result.ErrorCount)
 	}()
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": fmt.Sprintf("压测已启动: %d台设备, %d秒", cfg.DeviceCount, cfg.Duration)})
@@ -500,5 +501,4 @@ func (h *Handler) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// unused import guard
-var _ = types.ProtocolJT808
+

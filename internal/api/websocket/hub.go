@@ -3,12 +3,12 @@ package websocket
 import (
 	"encoding/hex"
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/suoten/jt-simulate/internal/logger"
 )
 
 var upgrader = websocket.Upgrader{
@@ -34,7 +34,7 @@ func NewHub() *Hub {
 func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("WebSocket upgrade error: %v", err)
+		logger.Error("WebSocket upgrade error", "error", err)
 		return
 	}
 

@@ -229,6 +229,9 @@ func (c *JT808Codec) ParseBody(msgID uint16, data []byte) (types.MessageBody, er
 
 // EncodeBody 编码消息体
 func (c *JT808Codec) EncodeBody(body types.MessageBody) ([]byte, error) {
+	if body == nil {
+		return nil, nil
+	}
 	return body.Marshal()
 }
 

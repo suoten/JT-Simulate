@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net"
 	"os"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/suoten/jt-simulate/internal/api"
 	"github.com/suoten/jt-simulate/internal/config"
 	"github.com/suoten/jt-simulate/internal/engine"
+	"github.com/suoten/jt-simulate/internal/logger"
 	"github.com/suoten/jt-simulate/internal/workshop"
 )
 
@@ -75,10 +77,38 @@ func getFrontendFS() fs.FS {
 	return distFS
 }
 
+// setupLogger 根据配置初始化日志
+func setupLogger(cfg *config.LogConfig) {
+	level := slog.LevelInfo
+	switch cfg.Level {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
+
+	var handler slog.Handler
+	opts := &slog.HandlerOptions{Level: level}
+	if cfg.Format == "json" {
+		handler = slog.NewJSONHandler(os.Stdout, opts)
+	} else {
+		handler = slog.NewTextHandler(os.Stdout, opts)
+	}
+	logger.SetLogger(slog.New(handler))
+}
+
 // runDesktop 启动 Wails 桌面应用（双击 exe 默认行为）
 func runDesktop(cmd *cobra.Command, args []string) {
+	// 桌面模式使用默认配置
+	cfg := config.DefaultConfig()
+	setupLogger(&cfg.Log)
+
 	eng := engine.New()
-	eng.LoadDevices() // 加载持久化设备
+	if err := eng.LoadDevices(); err != nil {
+		logger.Error("加载持久化设备失败", "error", err)
+	}
 	ws := workshop.New()
 	server := api.NewServer(eng, ws)
 	frontendFS := getFrontendFS()
@@ -95,7 +125,7 @@ func runDesktop(cmd *cobra.Command, args []string) {
 	// 后台启动 HTTP 服务（不提供前端文件，由 Wails 提供）
 	go func() {
 		if err := server.Start("127.0.0.1", port, "release", nil); err != nil {
-			fmt.Fprintf(os.Stderr, "服务启动失败: %v\n", err)
+			logger.Error("桌面服务启动失败", "error", err)
 			os.Exit(1)
 		}
 	}()
@@ -117,23 +147,29 @@ func runServer(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("JT-Simulate v%s\n", version)
-	fmt.Printf("服务模式启动: http://%s:%d\n", cfg.Server.Host, cfg.Server.Port)
-	fmt.Printf("按 Ctrl+C 退出\n\n")
+	// 根据配置初始化日志
+	setupLogger(&cfg.Log)
+
+	logger.Info("JT-Simulate 启动", "version", version)
+	logger.Info("服务模式", "host", cfg.Server.Host, "port", cfg.Server.Port)
 
 	eng := engine.New()
-	eng.LoadDevices() // 加载持久化设备
+	if err := eng.LoadDevices(); err != nil {
+		logger.Error("加载持久化设备失败", "error", err)
+	}
 	ws := workshop.New()
 
 	server := api.NewServer(eng, ws)
 
 	frontendFS := getFrontendFS()
 	if frontendFS == nil {
-		fmt.Println("提示: 前端文件未找到，仅提供API服务")
+		logger.Warn("前端文件未找到，仅提供API服务")
 	}
 
+	logger.Info("按 Ctrl+C 优雅退出")
+
 	if err := server.Start(cfg.Server.Host, cfg.Server.Port, cfg.Server.Mode, frontendFS); err != nil {
-		fmt.Fprintf(os.Stderr, "服务启动失败: %v\n", err)
+		logger.Error("服务启动失败", "error", err)
 		os.Exit(1)
 	}
 }
