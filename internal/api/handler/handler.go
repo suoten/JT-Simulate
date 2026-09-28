@@ -162,7 +162,6 @@ func (h *Handler) StartDevice(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.engine.StartDevice(c.Request.Context(), id); err != nil {
 		errMsg := err.Error()
-		// 友好化连接错误
 		if strings.Contains(errMsg, "connectex: No connection") || strings.Contains(errMsg, "connection refused") {
 			c.JSON(http.StatusOK, gin.H{"success": false, "error": "无法连接到目标平台，请确认目标地址是否正确且平台已启动", "error_type": "connection_failed"})
 			return
@@ -246,7 +245,7 @@ func (h *Handler) GetScenario(c *gin.Context) {
 func (h *Handler) RunScenario(c *gin.Context) {
 	var req struct {
 		Name   string `json:"name"`
-		Target string `json:"target"` // 可选：目标平台地址
+		Target string `json:"target"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
@@ -258,40 +257,36 @@ func (h *Handler) RunScenario(c *gin.Context) {
 		return
 	}
 
-	// 验证场景存在
 	scenario, err := h.scenarioEngine.Get(req.Name)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
-	_ = scenario // scenario is used below via scenario.Protocol
 
-	// 确定目标地址
 	targetAddr := req.Target
 	if targetAddr == "" {
 		targetAddr = "127.0.0.1:7611"
 	}
 
-	// 创建一个临时仿真设备用于场景
 	phone := "013800009999"
 	devCfg := &base.DeviceConfig{
-		ID:         "scenario_" + phone,
-		Protocol:   scenario.Protocol,
-		Phone:      phone,
-		Plate:      "场景测试",
-		PlateColor: 1,
-		TargetAddr: targetAddr,
-		AuthCode:   "scenario_test",
-		ProvinceID:    11,
-		CityID:        100,
-		Manufacturer:  "SUOTEN",
-		TerminalModel: "JT-100",
-		TerminalID:    "9999999",
+		ID:                "scenario_" + phone,
+		Protocol:          scenario.Protocol,
+		Phone:             phone,
+		Plate:             "场景测试",
+		PlateColor:        1,
+		TargetAddr:        targetAddr,
+		AuthCode:          "scenario_test",
+		ProvinceID:        11,
+		CityID:            100,
+		Manufacturer:      "SUOTEN",
+		TerminalModel:     "JT-100",
+		TerminalID:        "9999999",
 		HeartbeatInterval: 60,
 		LocationInterval:  5,
 		ReconnectInterval: 15,
-		StartLat: 39.9093,
-		StartLon: 116.3974,
+		StartLat:          39.9093,
+		StartLon:          116.3974,
 	}
 
 	// 创建仿真器
@@ -303,12 +298,10 @@ func (h *Handler) RunScenario(c *gin.Context) {
 		sim = jt808sim.New(devCfg)
 	}
 
-	// 设置发送回调——计入消息统计
 	sim.SetOnSend(func(data []byte) {
-		// 统计通过引擎获取
+		// 场景设备发送的消息不计入引擎统计
 	})
 
-	// 连接目标平台
 	ctx := context.Background()
 	if err := sim.Online(ctx); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "error": fmt.Sprintf("设备连接失败: %v", err)})
@@ -337,32 +330,30 @@ func (h *Handler) RunScenario(c *gin.Context) {
 				lat, _ := step.Params["lat"].(float64)
 				lon, _ := step.Params["lon"].(float64)
 
-			// 使用类型断言安全检查，避免 panic
-			s, ok := sim.(*jt808sim.Simulator)
-			if !ok {
-				logger.Warn("场景步骤跳过：非JT808仿真器不支持位置操作", "protocol", scenario.Protocol)
-				break
-			}
-			if lat != 0 && lon != 0 {
-				s.SetSpeed(speedF)
-				s.SetDirection(180)
-			} else {
-				s.SetSpeed(speedF)
-			}
-
-			// 手动发送一条位置上报
-			s.SendLocation(s.CurLat(), s.CurLon(), uint16(speedF*10), 180)
+				// 安全类型断言，避免 panic
+				s, ok := sim.(*jt808sim.Simulator)
+				if !ok {
+					logger.Warn("场景步骤跳过：非JT808仿真器不支持位置操作", "protocol", scenario.Protocol)
+					break
+				}
+				if lat != 0 && lon != 0 {
+					s.SetSpeed(speedF)
+					s.SetDirection(180)
+				} else {
+					s.SetSpeed(speedF)
+				}
+				s.SendLocation(s.CurLat(), s.CurLon(), uint16(speedF*10), 180)
 
 			case "alarm":
 				alarmType, _ := step.Params["type"].(string)
 				var alarmFlag uint16
 				switch alarmType {
 				case "overspeed":
-					alarmFlag = 0x0001 // 超速报警位
+					alarmFlag = 0x0001
 				case "fatigue":
-					alarmFlag = 0x0002 // 疲劳驾驶报警位
+					alarmFlag = 0x0002
 				case "emergency":
-					alarmFlag = 0x0004 // 紧急报警位
+					alarmFlag = 0x0004
 				default:
 					alarmFlag = 0x0001
 				}
@@ -435,7 +426,6 @@ func (h *Handler) RunStress(c *gin.Context) {
 		return
 	}
 
-	// 输入校验
 	if cfg.DeviceCount <= 0 || cfg.DeviceCount > 10000 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "设备数量必须在 1-10000 之间"})
 		return
@@ -455,7 +445,6 @@ func (h *Handler) RunStress(c *gin.Context) {
 		cfg.Interval = 30
 	}
 
-	// 异步执行
 	go func() {
 		result, err := h.stressEngine.Run(context.Background(), &cfg)
 		if err != nil {
@@ -500,5 +489,3 @@ func (h *Handler) GetStats(c *gin.Context) {
 func (h *Handler) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
-
-

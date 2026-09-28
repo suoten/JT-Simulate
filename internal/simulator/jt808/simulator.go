@@ -15,6 +15,9 @@ import (
 type Simulator struct {
 	*base.Simulator
 	codec *jt808.JT808Codec
+
+	// 注册应答同步
+	regRespCh chan *jt808.RegisterRespMessage
 }
 
 // New 创建JT808仿真器
@@ -22,13 +25,14 @@ func New(cfg *base.DeviceConfig) *Simulator {
 	s := &Simulator{
 		Simulator: base.NewSimulator(cfg),
 		codec:     jt808.NewCodec(),
+		regRespCh: make(chan *jt808.RegisterRespMessage, 1),
 	}
 	// 设置原始数据接收处理器——自动应答平台下发消息
 	s.SetOnRawRecv(s.handlePlatformMessage)
 	return s
 }
 
-// Online 上线（注册→鉴权→心跳→位置上报），带自动重连
+// Online 上线（注册→等待应答→鉴权→心跳→位置上报），带自动重连
 func (s *Simulator) Online(ctx context.Context) error {
 	if err := s.Connect(ctx); err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -38,27 +42,50 @@ func (s *Simulator) Online(ctx context.Context) error {
 		return fmt.Errorf("register: %w", err)
 	}
 
-	// 等待注册应答
-	time.Sleep(500 * time.Millisecond)
+	// 等待注册应答（事件驱动，最多等 5 秒）
+	select {
+	case resp := <-s.regRespCh:
+		if resp.Result != 0 {
+			return fmt.Errorf("register rejected by platform: result=%d", resp.Result)
+		}
+		if resp.AuthCode != "" {
+			s.SetAuthCode(resp.AuthCode)
+		}
+	case <-time.After(5 * time.Second):
+		// 超时后仍尝试鉴权（有些平台不回复注册应答直接通过）
+		logger.Warn("等待注册应答超时，继续尝试鉴权", "phone", s.Config().Phone)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
 	// 发送鉴权
 	if err := s.sendAuth(); err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
 
-	// 启动心跳
-	s.StartHeartbeat(ctx, s.sendHeartbeat)
+	// 启动心跳（使用内部可取消的 ctx，确保 Disconnect 能停止所有 goroutine）
+	internalCtx := s.Context()
+	s.StartHeartbeat(internalCtx, s.sendHeartbeat)
 
 	// 启动定时位置上报
-	s.StartLocationReport(ctx, s.sendLocation)
+	s.StartLocationReport(internalCtx, s.sendLocation)
 
 	// 启动自动重连
-	s.StartReconnectLoop(ctx, func(ctx context.Context) error {
+	s.StartReconnectLoop(internalCtx, func(ctx context.Context) error {
 		// 重连后重新注册+鉴权
 		if err := s.sendRegister(); err != nil {
 			return err
 		}
-		time.Sleep(300 * time.Millisecond)
+		// 等待注册应答
+		select {
+		case resp := <-s.regRespCh:
+			if resp.AuthCode != "" {
+				s.SetAuthCode(resp.AuthCode)
+			}
+		case <-time.After(3 * time.Second):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		if err := s.sendAuth(); err != nil {
 			return err
 		}
@@ -87,8 +114,10 @@ func (s *Simulator) handlePlatformMessage(data []byte) {
 	for _, frame := range frames {
 		msg, err := s.codec.Decode(frame)
 		if err != nil {
+			logger.Debug("无法解析帧", "phone", s.Config().Phone, "error", err, "frame_len", len(frame))
 			continue // 忽略无法解析的帧
 		}
+		logger.Debug("收到平台消息", "phone", s.Config().Phone, "msg_id", fmt.Sprintf("0x%04X", msg.Header.MsgID))
 		s.autoRespond(msg)
 	}
 }
@@ -107,11 +136,15 @@ func (s *Simulator) autoRespond(msg *types.Message) {
 	case 0x8001: // 平台通用应答——不需要回复
 		return
 
-	case 0x8100: // 终端注册应答——记录鉴权码
+	case 0x8100: // 终端注册应答——通知等待方
 		if regResp, ok := msg.Body.(*jt808.RegisterRespMessage); ok {
 			if regResp.Result == 0 && regResp.AuthCode != "" {
-				cfg.AuthCode = regResp.AuthCode
 				logger.Info("注册成功", "phone", cfg.Phone, "auth_code", regResp.AuthCode)
+			}
+			// 非阻塞发送到 channel（Online 可能在等待）
+			select {
+			case s.regRespCh <- regResp:
+			default:
 			}
 		}
 		return
@@ -123,8 +156,8 @@ func (s *Simulator) autoRespond(msg *types.Message) {
 			Latitude:  s.CurLat(),
 			Longitude: s.CurLon(),
 			Altitude:  5000,
-Speed:     uint16(s.CurSpeed() * 10),
-		Direction: s.CurDir(),
+			Speed:     uint16(s.CurSpeed() * 10),
+			Direction: s.CurDir(),
 			Time:      now.Format("060102150405"),
 		}
 		s.sendResp(respHeader, body)
@@ -138,7 +171,7 @@ Speed:     uint16(s.CurSpeed() * 10),
 			}
 			body := &jt808.CommandRespMessage{
 				RespSeqNum: msg.Header.SeqNum,
-				Result:     0, // 成功
+				Result:     0,
 				ParamCount: byte(len(paramIDs)),
 				Params:     paramIDs,
 			}
@@ -157,7 +190,7 @@ Speed:     uint16(s.CurSpeed() * 10),
 		body := &jt808.TerminalGeneralRespMessage{
 			RespSeqNum: msg.Header.SeqNum,
 			RespMsgID:  msg.Header.MsgID,
-			Result:     0, // 成功
+			Result:     0,
 		}
 		s.sendResp(respHeader, body)
 
@@ -188,7 +221,7 @@ Speed:     uint16(s.CurSpeed() * 10),
 		}
 		s.sendResp(respHeader, body)
 
-	case jt808.MsgIDTempLocationTrack: // 0x8202 临时位置跟踪——回复通用应答并开始跟踪
+	case jt808.MsgIDTempLocationTrack: // 0x8202 临时位置跟踪——回复通用应答
 		respHeader.MsgID = jt808.MsgIDTerminalGeneralResp
 		body := &jt808.TerminalGeneralRespMessage{
 			RespSeqNum: msg.Header.SeqNum,
@@ -213,11 +246,11 @@ Speed:     uint16(s.CurSpeed() * 10),
 func (s *Simulator) sendResp(header *types.MessageHeader, body types.MessageBody) {
 	data, err := s.codec.Encode(header, body)
 	if err != nil {
-			logger.Error("编码应答失败", "phone", s.Config().Phone, "error", err)
+		logger.Error("编码应答失败", "phone", s.Config().Phone, "error", err)
 		return
 	}
 	if err := s.Send(data); err != nil {
-			logger.Error("发送应答失败", "phone", s.Config().Phone, "error", err)
+		logger.Error("发送应答失败", "phone", s.Config().Phone, "error", err)
 	}
 }
 
@@ -261,8 +294,15 @@ func (s *Simulator) sendAuth() error {
 		ProtocolVer: 1,
 	}
 
+	// 使用运行时鉴权码（注册应答中获取的），回退到配置中的
+	authCode := cfg.AuthCode
+	rtCode := s.getAuthCode()
+	if rtCode != "" {
+		authCode = rtCode
+	}
+
 	body := &jt808.AuthMessage{
-		AuthCode: cfg.AuthCode,
+		AuthCode: authCode,
 		IMEI:     cfg.IMEI,
 	}
 
@@ -272,6 +312,11 @@ func (s *Simulator) sendAuth() error {
 	}
 
 	return s.Send(data)
+}
+
+// getAuthCode 获取运行时鉴权码
+func (s *Simulator) getAuthCode() string {
+	return s.Simulator.GetAuthCode()
 }
 
 // sendHeartbeat 发送心跳

@@ -26,6 +26,7 @@ type Simulator interface {
 	SetOnState(func(base.DeviceState))
 	SetOnSend(func([]byte))
 	SetOnRawRecv(base.RawDataHandler)
+	WrapOnRawRecv(base.RawDataHandler)
 }
 
 // Engine 仿真引擎
@@ -40,8 +41,8 @@ type Engine struct {
 // DeviceInfo 设备信息
 type DeviceInfo struct {
 	Config    *base.DeviceConfig
-	Simulator interface{} // Simulator 接口实现
-	state     atomic.Int32 // 使用 atomic 保护状态访问
+	Simulator Simulator // 直接存储 Simulator 接口，避免反复类型断言
+	state     atomic.Int32
 }
 
 // State 获取设备状态（线程安全）
@@ -164,7 +165,6 @@ func (e *Engine) CreateDevice(cfg *base.DeviceConfig) error {
 	e.devices[cfg.ID] = info
 	atomic.AddInt64(&e.stats.TotalDevices, 1)
 
-	// 持久化
 	go e.SaveDevices()
 
 	logger.Info("设备已创建", "device_id", cfg.ID, "protocol", cfg.Protocol)
@@ -181,16 +181,13 @@ func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
 		return fmt.Errorf("device %s not found", deviceID)
 	}
 
-	// 使用 atomic 读取状态，避免数据竞争
 	if info.State() == base.StateOnline || info.State() == base.StateConnecting {
 		return fmt.Errorf("device %s is already running", deviceID)
 	}
 
-	sim, ok := info.Simulator.(Simulator)
-	if !ok {
-		return fmt.Errorf("simulator does not implement Simulator interface")
-	}
+	sim := info.Simulator // Simulator 接口，不需要类型断言
 
+	// 设置回调——每次启动都重新设置，确保回调引用最新的引擎状态
 	deviceIDCopy := deviceID
 	sim.SetOnState(func(state base.DeviceState) {
 		info.setState(state)
@@ -204,20 +201,25 @@ func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
 		}
 		logger.Debug("设备状态变更", "device_id", deviceIDCopy, "state", state.String())
 	})
+
+	// 缓存 phone 避免在回调闭包中反复访问 info.Config
+	phone := info.Config.Phone
+	protocol := info.Config.Protocol
 	sim.SetOnSend(func(data []byte) {
 		atomic.AddInt64(&e.stats.TotalMessages, 1)
 		if e.broadcast != nil {
 			codec := jt808.NewCodec()
 			if msg, err := codec.Decode(data); err == nil {
 				msgName := jt808.MsgName(msg.Header.MsgID)
-				e.broadcast("up", info.Config.Phone, msgName,
+				e.broadcast("up", phone, msgName,
 					fmt.Sprintf("0x%04X", msg.Header.MsgID), data)
 			} else {
-				e.broadcast("up", info.Config.Phone, info.Config.Protocol, "", data)
+				e.broadcast("up", phone, protocol, "", data)
 			}
 		}
 	})
-	sim.SetOnRawRecv(func(data []byte) {
+
+	sim.WrapOnRawRecv(func(data []byte) {
 		if e.broadcast != nil {
 			codec := jt808.NewCodec()
 			frames := jt808.SplitByDelimiter(data)
@@ -227,10 +229,10 @@ func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
 			for _, frame := range frames {
 				if msg, err := codec.Decode(frame); err == nil {
 					msgName := jt808.MsgName(msg.Header.MsgID)
-					e.broadcast("down", info.Config.Phone, msgName,
+					e.broadcast("down", phone, msgName,
 						fmt.Sprintf("0x%04X", msg.Header.MsgID), frame)
 				} else {
-					e.broadcast("down", info.Config.Phone, "未知", "", frame)
+					e.broadcast("down", phone, "未知", "", frame)
 				}
 			}
 		}
@@ -254,10 +256,7 @@ func (e *Engine) StopDevice(deviceID string) error {
 		return nil
 	}
 
-	sim, ok := info.Simulator.(Simulator)
-	if !ok {
-		return fmt.Errorf("simulator does not implement Simulator interface")
-	}
+	sim := info.Simulator
 	sim.Offline()
 	logger.Info("停止设备", "device_id", deviceID)
 	return nil
@@ -266,24 +265,25 @@ func (e *Engine) StopDevice(deviceID string) error {
 // DeleteDevice 删除设备
 func (e *Engine) DeleteDevice(deviceID string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	info, ok := e.devices[deviceID]
 	if !ok {
+		e.mu.Unlock()
 		return fmt.Errorf("device %s not found", deviceID)
 	}
 
-	if info.State() != base.StateOffline {
-		if sim, ok := info.Simulator.(Simulator); ok {
-			sim.Offline()
-		}
+	// 在持锁状态下取出 sim，然后释放锁再调用 Offline（避免死锁）
+	sim := info.Simulator
+	wasOnline := info.State() != base.StateOffline
+	delete(e.devices, deviceID)
+	e.mu.Unlock()
+
+	if wasOnline {
+		sim.Offline()
 		cur := atomic.LoadInt64(&e.stats.OnlineDevices)
 		if cur > 0 {
 			atomic.AddInt64(&e.stats.OnlineDevices, -1)
 		}
 	}
-
-	delete(e.devices, deviceID)
 	atomic.AddInt64(&e.stats.TotalDevices, -1)
 
 	go e.SaveDevices()
@@ -326,17 +326,29 @@ func (e *Engine) GetStats() EngineStats {
 }
 
 // StopAll 停止所有设备（优雅关闭）
+// 注意：不持锁调用 Offline，因为 Offline 内部会 Wait goroutine，
+// 而 goroutine 中的回调可能需要获取锁，导致死锁。
 func (e *Engine) StopAll() {
 	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	count := 0
+	type simEntry struct {
+		sim    Simulator
+		online bool
+	}
+	entries := make([]simEntry, 0, len(e.devices))
 	for _, info := range e.devices {
-		if info.State() != base.StateOffline {
-			if sim, ok := info.Simulator.(Simulator); ok {
-				sim.Offline()
-				count++
-			}
+		entries = append(entries, simEntry{
+			sim:    info.Simulator,
+			online: info.State() != base.StateOffline,
+		})
+	}
+	e.mu.RUnlock()
+
+	// 释放锁后再停止设备，避免死锁
+	count := 0
+	for _, entry := range entries {
+		if entry.online {
+			entry.sim.Offline()
+			count++
 		}
 	}
 	if count > 0 {
@@ -345,17 +357,14 @@ func (e *Engine) StopAll() {
 
 	// 保存设备列表
 	if e.storage != nil {
-		if err := e.storage.SaveDevices(e.deviceListLocked()); err != nil {
+		e.mu.RLock()
+		list := make([]*base.DeviceConfig, 0, len(e.devices))
+		for _, info := range e.devices {
+			list = append(list, info.Config)
+		}
+		e.mu.RUnlock()
+		if err := e.storage.SaveDevices(list); err != nil {
 			logger.Error("关闭时保存设备列表失败", "error", err)
 		}
 	}
-}
-
-// deviceListLocked 在已持锁的情况下获取设备列表
-func (e *Engine) deviceListLocked() []*base.DeviceConfig {
-	list := make([]*base.DeviceConfig, 0, len(e.devices))
-	for _, info := range e.devices {
-		list = append(list, info.Config)
-	}
-	return list
 }

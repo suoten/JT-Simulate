@@ -34,14 +34,15 @@ func (s *Simulator) Online(ctx context.Context) error {
 		return fmt.Errorf("vehicle login: %w", err)
 	}
 
-	// 启动心跳
-	s.StartHeartbeat(ctx, s.sendHeartbeat)
+	// 启动心跳（使用内部可取消的 ctx，确保 Disconnect 能停止所有 goroutine）
+	internalCtx := s.Context()
+	s.StartHeartbeat(internalCtx, s.sendHeartbeat)
 
 	// 启动定时实时数据上报
-	s.StartLocationReport(ctx, s.sendRealtimeInfo)
+	s.StartLocationReport(internalCtx, s.sendRealtimeInfo)
 
 	// 启动自动重连
-	s.StartReconnectLoop(ctx, func(ctx context.Context) error {
+	s.StartReconnectLoop(internalCtx, func(ctx context.Context) error {
 		if err := s.sendLogin(); err != nil {
 			return err
 		}

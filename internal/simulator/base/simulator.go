@@ -38,7 +38,7 @@ func (s DeviceState) String() string {
 	}
 }
 
-// DeviceConfig 设备配置
+// DeviceConfig 设备配置（不可变部分，JSON 序列化）
 type DeviceConfig struct {
 	ID         string `json:"id"`
 	Protocol   string `json:"protocol"`
@@ -62,13 +62,16 @@ type DeviceConfig struct {
 	Route   string  `json:"route"`
 	StartLat float64 `json:"start_lat"`
 	StartLon float64 `json:"start_lon"`
+}
 
-	// 运行时状态
-	curLat  float64
-	curLon  float64
-	curSpeed    float64 // km/h
-	curDir      uint16  // 0-359
-	routeIndex  int
+// runtimeState 运行时状态（可变，需要加锁保护）
+type runtimeState struct {
+	mu        sync.Mutex
+	curLat    float64
+	curLon    float64
+	curSpeed  float64 // km/h
+	curDir    uint16  // 0-359
+	authCode  string  // 运行时从平台收到的鉴权码
 }
 
 // MessageHandler 消息处理器
@@ -80,6 +83,7 @@ type RawDataHandler func(data []byte)
 // Simulator 仿真器基类
 type Simulator struct {
 	config     *DeviceConfig
+	rt         runtimeState // 运行时状态（带锁）
 	state      atomic.Int32
 	conn       net.Conn
 	connMu     sync.RWMutex
@@ -106,17 +110,18 @@ func NewSimulator(cfg *DeviceConfig) *Simulator {
 	if cfg.ReconnectInterval <= 0 {
 		cfg.ReconnectInterval = 15
 	}
-	cfg.curLat = cfg.StartLat
-	cfg.curLon = cfg.StartLon
-	if cfg.curLat == 0 {
-		cfg.curLat = 39.9093
-	}
-	if cfg.curLon == 0 {
-		cfg.curLon = 116.3974
-	}
-	return &Simulator{
+	s := &Simulator{
 		config: cfg,
 	}
+	s.rt.curLat = cfg.StartLat
+	s.rt.curLon = cfg.StartLon
+	if s.rt.curLat == 0 {
+		s.rt.curLat = 39.9093
+	}
+	if s.rt.curLon == 0 {
+		s.rt.curLon = 116.3974
+	}
+	return s
 }
 
 // Config 获取配置
@@ -168,6 +173,24 @@ func (s *Simulator) SetOnRawRecv(handler RawDataHandler) {
 	s.onRawRecv = handler
 }
 
+// WrapOnRawRecv 在现有的 onRawRecv 回调之外追加一个回调（不覆盖子类在 New 中设置的 handler）
+// 新 handler 会在原有 handler 之后被调用
+func (s *Simulator) WrapOnRawRecv(extra RawDataHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing := s.onRawRecv
+	if existing == nil {
+		s.onRawRecv = extra
+		return
+	}
+	s.onRawRecv = func(data []byte) {
+		existing(data) // 先调用子类的消息处理（如自动应答）
+		if extra != nil {
+			extra(data) // 再调用引擎的广播
+		}
+	}
+}
+
 // NextSeqNum 获取下一个序号
 func (s *Simulator) NextSeqNum() uint16 {
 	s.seqMu.Lock()
@@ -200,10 +223,16 @@ func (s *Simulator) connectAndRun(ctx context.Context) error {
 
 	// 启动接收循环
 	ctx, s.cancel = context.WithCancel(ctx)
+	s.ctx = ctx
 	s.wg.Add(1)
 	go s.recvLoop(ctx)
 
 	return nil
+}
+
+// Context 返回内部可取消的 context（供子类在启动 goroutine 时使用）
+func (s *Simulator) Context() context.Context {
+	return s.ctx
 }
 
 // StartReconnectLoop 启动自动重连循环
@@ -394,43 +423,83 @@ func (s *Simulator) StartLocationReport(ctx context.Context, reportFunc func() e
 
 // MoveAlongRoute 沿路线移动一个步长，返回新的经纬度
 func (s *Simulator) MoveAlongRoute() (lat, lon float64) {
+	s.rt.mu.Lock()
+	defer s.rt.mu.Unlock()
+
 	// 简单模拟：沿当前方向移动一定距离
-	// 1 km/h 在纬度方向约 0.00001 度/秒
 	interval := float64(s.config.LocationInterval)
-	distance := s.config.curSpeed * 1000 / 3600 * interval // 米
+	distance := s.rt.curSpeed * 1000 / 3600 * interval // 米
 	// 1度纬度 ≈ 111000米
-	latDelta := distance / 111000 * math.Cos(float64(s.config.curDir)*math.Pi/180)
-	lonDelta := distance / (111000 * math.Cos(s.config.curLat*math.Pi/180)) * math.Sin(float64(s.config.curDir)*math.Pi/180)
-	s.config.curLat += latDelta
-	s.config.curLon += lonDelta
-	return s.config.curLat, s.config.curLon
+	latDelta := distance / 111000 * math.Cos(float64(s.rt.curDir)*math.Pi/180)
+	lonDelta := distance / (111000 * math.Cos(s.rt.curLat*math.Pi/180)) * math.Sin(float64(s.rt.curDir)*math.Pi/180)
+	s.rt.curLat += latDelta
+	s.rt.curLon += lonDelta
+	return s.rt.curLat, s.rt.curLon
 }
 
 // SetSpeed 设置当前速度
 func (s *Simulator) SetSpeed(kmh float64) {
-	s.config.curSpeed = kmh
+	s.rt.mu.Lock()
+	defer s.rt.mu.Unlock()
+	s.rt.curSpeed = kmh
 }
 
 // SetDirection 设置当前方向
 func (s *Simulator) SetDirection(dir uint16) {
-	s.config.curDir = dir
+	s.rt.mu.Lock()
+	defer s.rt.mu.Unlock()
+	s.rt.curDir = dir
+}
+
+// SetAuthCode 设置运行时鉴权码
+func (s *Simulator) SetAuthCode(code string) {
+	s.rt.mu.Lock()
+	defer s.rt.mu.Unlock()
+	s.rt.authCode = code
+}
+
+// GetAuthCode 获取运行时鉴权码
+func (s *Simulator) GetAuthCode() string {
+	s.rt.mu.Lock()
+	defer s.rt.mu.Unlock()
+	return s.rt.authCode
 }
 
 // CurLat 返回当前纬度
-func (s *Simulator) CurLat() float64 { return s.config.curLat }
+func (s *Simulator) CurLat() float64 {
+	s.rt.mu.Lock()
+	defer s.rt.mu.Unlock()
+	return s.rt.curLat
+}
 
 // CurLon 返回当前经度
-func (s *Simulator) CurLon() float64 { return s.config.curLon }
+func (s *Simulator) CurLon() float64 {
+	s.rt.mu.Lock()
+	defer s.rt.mu.Unlock()
+	return s.rt.curLon
+}
 
 // CurSpeed 返回当前速度
-func (s *Simulator) CurSpeed() float64 { return s.config.curSpeed }
+func (s *Simulator) CurSpeed() float64 {
+	s.rt.mu.Lock()
+	defer s.rt.mu.Unlock()
+	return s.rt.curSpeed
+}
 
 // CurDir 返回当前方向
-func (s *Simulator) CurDir() uint16 { return s.config.curDir }
+func (s *Simulator) CurDir() uint16 {
+	s.rt.mu.Lock()
+	defer s.rt.mu.Unlock()
+	return s.rt.curDir
+}
 
 // AdvanceRoute 推进路线并返回新坐标和方向
 func (s *Simulator) AdvanceRoute(speedKmh float64) (lat, lon float64, direction uint16) {
-	s.config.curSpeed = speedKmh
-	s.MoveAlongRoute()
-	return s.config.curLat, s.config.curLon, s.config.curDir
+	s.rt.mu.Lock()
+	s.rt.curSpeed = speedKmh
+	direction = s.rt.curDir
+	s.rt.mu.Unlock()
+
+	lat, lon = s.MoveAlongRoute()
+	return
 }

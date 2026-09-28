@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -78,7 +79,9 @@ func (s *Server) Start(host string, port int, mode string, frontendFS fs.FS) err
 	}
 
 	// 限流中间件（每秒最多 20 个请求，突发 50）
-	r.Use(rateLimitMiddleware(20, 50))
+	rl := newRateLimiter(20, 50)
+	go rl.cleanupLoop() // 后台清理过期 bucket
+	r.Use(rl.middleware())
 
 	// API路由
 	h := handler.New(s.engine, s.workshop)
@@ -171,7 +174,7 @@ func (s *Server) Hub() *websocket.Hub {
 	return s.hub
 }
 
-// authMiddleware API token 认证中间件
+// authMiddleware API token 认证中间件（使用 constant-time comparison 防时序攻击）
 func authMiddleware(token string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 健康检查和 WebSocket 不需要认证
@@ -194,7 +197,8 @@ func authMiddleware(token string) gin.HandlerFunc {
 			tokenVal = strings.TrimPrefix(auth, "Bearer ")
 		}
 
-		if tokenVal != token {
+		// constant-time comparison 防止时序攻击
+		if subtle.ConstantTimeCompare([]byte(tokenVal), []byte(token)) != 1 {
 			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "认证失败"})
 			c.Abort()
 			return
@@ -204,38 +208,66 @@ func authMiddleware(token string) gin.HandlerFunc {
 	}
 }
 
-// rateLimitMiddleware 简单令牌桶限流
-func rateLimitMiddleware(rate, burst int) gin.HandlerFunc {
-	type bucket struct {
-		tokens  float64
-		last    time.Time
+// rateLimiter 令牌桶限流器（带过期清理）
+type rateLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]*bucket
+	rate    float64
+	burst   float64
+}
+
+type bucket struct {
+	tokens float64
+	last   time.Time
+}
+
+func newRateLimiter(rate, burst int) *rateLimiter {
+	return &rateLimiter{
+		buckets: make(map[string]*bucket),
+		rate:    float64(rate),
+		burst:   float64(burst),
 	}
-	var (
-		mu      sync.Mutex
-		buckets = make(map[string]*bucket)
-	)
+}
+
+func (rl *rateLimiter) middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
-		mu.Lock()
-		b, ok := buckets[ip]
+		rl.mu.Lock()
+		b, ok := rl.buckets[ip]
 		if !ok {
-			b = &bucket{tokens: float64(burst), last: time.Now()}
-			buckets[ip] = b
+			b = &bucket{tokens: rl.burst, last: time.Now()}
+			rl.buckets[ip] = b
 		}
 		elapsed := time.Since(b.last).Seconds()
-		b.tokens += elapsed * float64(rate)
-		if b.tokens > float64(burst) {
-			b.tokens = float64(burst)
+		b.tokens += elapsed * rl.rate
+		if b.tokens > rl.burst {
+			b.tokens = rl.burst
 		}
 		b.last = time.Now()
 		if b.tokens < 1 {
-			mu.Unlock()
+			rl.mu.Unlock()
 			c.JSON(http.StatusTooManyRequests, gin.H{"success": false, "error": "请求过于频繁"})
 			c.Abort()
 			return
 		}
 		b.tokens--
-		mu.Unlock()
+		rl.mu.Unlock()
 		c.Next()
+	}
+}
+
+// cleanupLoop 定期清理过期的 bucket（每 5 分钟，超过 10 分钟未访问的 IP 清除）
+func (rl *rateLimiter) cleanupLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		rl.mu.Lock()
+		cutoff := time.Now().Add(-10 * time.Minute)
+		for ip, b := range rl.buckets {
+			if b.last.Before(cutoff) {
+				delete(rl.buckets, ip)
+			}
+		}
+		rl.mu.Unlock()
 	}
 }

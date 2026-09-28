@@ -21,10 +21,13 @@ jobs:
       run: go mod tidy
 
     - name: Build
-      run: go build -v .
+      run: go build -v ./...
 
-    - name: Test
-      run: go test -v ./...
+    - name: Vet
+      run: go vet ./...
+
+    - name: Test with race detector
+      run: go test -v -race -count=1 -timeout 180s ./...
 
     - name: Build binary
       run: go build -o jt-simulate .
