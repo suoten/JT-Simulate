@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -26,6 +27,7 @@ type Server struct {
 	engine   *engine.Engine
 	workshop *workshop.Workshop
 	hub      *websocket.Hub
+	apiToken string // API 认证 token（桌面模式为空，跳过认证）
 }
 
 // NewServer 创建服务器
@@ -43,6 +45,12 @@ func NewServer(e *engine.Engine, w *workshop.Workshop) *Server {
 
 // Start 启动服务器（支持优雅关闭）
 func (s *Server) Start(host string, port int, mode string, frontendFS fs.FS) error {
+	return s.StartWithTLS(host, port, mode, frontendFS, "", "")
+}
+
+// StartWithTLS 启动服务器（支持优雅关闭 + HTTPS）
+// certFile 和 keyFile 为空时使用 HTTP
+func (s *Server) StartWithTLS(host string, port int, mode string, frontendFS fs.FS, certFile, keyFile string) error {
 	gin.SetMode(mode)
 	r := gin.Default()
 
@@ -75,6 +83,7 @@ func (s *Server) Start(host string, port int, mode string, frontendFS fs.FS) err
 			logger.Warn("未设置 JT_SIMULATE_TOKEN 环境变量，使用默认 token，生产环境请务必设置",
 				"default_token", apiToken)
 		}
+		s.apiToken = apiToken
 		r.Use(authMiddleware(apiToken))
 	}
 
@@ -87,12 +96,12 @@ func (s *Server) Start(host string, port int, mode string, frontendFS fs.FS) err
 	h := handler.New(s.engine, s.workshop)
 	h.RegisterRoutes(r)
 
-	// WebSocket
+	// WebSocket（支持 token 查询参数认证）
 	r.GET("/api/v1/ws/monitor", func(c *gin.Context) {
-		s.hub.HandleWS(c.Writer, c.Request)
+		s.handleWSAuth(c)
 	})
 	r.GET("/ws", func(c *gin.Context) {
-		s.hub.HandleWS(c.Writer, c.Request)
+		s.handleWSAuth(c)
 	})
 
 	// 前端静态文件
@@ -138,13 +147,29 @@ func (s *Server) Start(host string, port int, mode string, frontendFS fs.FS) err
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: r,
+		// 防止慢速攻击
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// 启动 HTTP 服务（异步）
+	useTLS := certFile != "" && keyFile != ""
+	if useTLS {
+		srv.TLSConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12, // 最低 TLS 1.2
+		}
+	}
+
+	// 启动 HTTP/HTTPS 服务（异步）
 	go func() {
-		logger.Info("HTTP 服务启动", "addr", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("HTTP 服务异常", "error", err)
+		if useTLS {
+			logger.Info("HTTPS 服务启动", "addr", addr, "cert", certFile)
+			if err := srv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
+				logger.Error("HTTPS 服务异常", "error", err)
+			}
+		} else {
+			logger.Info("HTTP 服务启动", "addr", addr)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("HTTP 服务异常", "error", err)
+			}
 		}
 	}()
 
@@ -174,12 +199,32 @@ func (s *Server) Hub() *websocket.Hub {
 	return s.hub
 }
 
+// handleWSAuth 处理 WebSocket 连接的 token 认证
+// 桌面模式（apiToken 为空）直接放行
+// 服务模式通过查询参数 ?token=xxx 认证（WebSocket 无法设置自定义 Header）
+func (s *Server) handleWSAuth(c *gin.Context) {
+	if s.apiToken != "" {
+		token := c.Query("token")
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) != 1 {
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "WebSocket 认证失败"})
+			return
+		}
+	}
+	s.hub.HandleWS(c.Writer, c.Request)
+}
+
 // authMiddleware API token 认证中间件（使用 constant-time comparison 防时序攻击）
 func authMiddleware(token string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 健康检查和 WebSocket 不需要认证
+		// 健康检查不需要认证
 		path := c.Request.URL.Path
-		if path == "/api/v1/health" || strings.HasPrefix(path, "/ws") || strings.HasPrefix(path, "/api/v1/ws") {
+		if path == "/api/v1/health" {
+			c.Next()
+			return
+		}
+
+		// WebSocket 路由通过 handleWSAuth 单独认证
+		if strings.HasPrefix(path, "/ws") || strings.HasPrefix(path, "/api/v1/ws") {
 			c.Next()
 			return
 		}

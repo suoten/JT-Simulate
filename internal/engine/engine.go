@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/suoten/jt-simulate/internal/logger"
 	"github.com/suoten/jt-simulate/internal/simulator/base"
@@ -35,7 +36,7 @@ type Engine struct {
 	devices   map[string]*DeviceInfo
 	stats     EngineStats
 	broadcast BroadcastFunc
-	storage   *storage.Storage
+	storage   storage.Storage
 }
 
 // DeviceInfo 设备信息
@@ -64,15 +65,20 @@ type EngineStats struct {
 
 // New 创建引擎
 func New() *Engine {
+	s := storage.New("data/devices.json")
 	return &Engine{
 		devices: make(map[string]*DeviceInfo),
-		storage: storage.New("data/devices.json"),
+		storage: storage.NewDebounced(s, 2*time.Second),
 	}
 }
 
 // SetStorage 设置存储
-func (e *Engine) SetStorage(s *storage.Storage) {
-	e.storage = s
+func (e *Engine) SetStorage(s storage.Storage) {
+	if s == nil {
+		e.storage = storage.NoopStorage()
+	} else {
+		e.storage = s
+	}
 }
 
 // LoadDevices 从持久化存储加载设备
@@ -355,7 +361,7 @@ func (e *Engine) StopAll() {
 		logger.Info("已停止所有在线设备", "count", count)
 	}
 
-	// 保存设备列表
+	// 保存设备列表（如果是防抖存储，确保挂起的保存被刷新）
 	if e.storage != nil {
 		e.mu.RLock()
 		list := make([]*base.DeviceConfig, 0, len(e.devices))
@@ -365,6 +371,12 @@ func (e *Engine) StopAll() {
 		e.mu.RUnlock()
 		if err := e.storage.SaveDevices(list); err != nil {
 			logger.Error("关闭时保存设备列表失败", "error", err)
+		}
+		// 如果是防抖存储，刷新挂起的保存
+		if ds, ok := e.storage.(interface{ Flush() error }); ok {
+			if err := ds.Flush(); err != nil {
+				logger.Error("关闭时刷新存储失败", "error", err)
+			}
 		}
 	}
 }

@@ -168,9 +168,17 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	logger.Info("按 Ctrl+C 优雅退出")
 
-	if err := server.Start(cfg.Server.Host, cfg.Server.Port, cfg.Server.Mode, frontendFS); err != nil {
-		logger.Error("服务启动失败", "error", err)
-		os.Exit(1)
+	if cfg.Server.CertFile != "" && cfg.Server.KeyFile != "" {
+		logger.Info("启用 HTTPS", "cert", cfg.Server.CertFile)
+		if err := server.StartWithTLS(cfg.Server.Host, cfg.Server.Port, cfg.Server.Mode, frontendFS, cfg.Server.CertFile, cfg.Server.KeyFile); err != nil {
+			logger.Error("服务启动失败", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		if err := server.Start(cfg.Server.Host, cfg.Server.Port, cfg.Server.Mode, frontendFS); err != nil {
+			logger.Error("服务启动失败", "error", err)
+			os.Exit(1)
+		}
 	}
 }
 

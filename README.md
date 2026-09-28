@@ -182,6 +182,8 @@ server:
   host: "0.0.0.0"       # 监听地址，0.0.0.0 表示所有网卡
   port: 8095             # 监听端口
   mode: release          # release 模式不输出调试日志
+  cert_file: ""          # TLS 证书文件路径（为空则使用 HTTP）
+  key_file: ""           # TLS 私钥文件路径（为空则使用 HTTP）
 
 simulator:
   default_protocol: jt808
@@ -197,6 +199,8 @@ targets:
 ```
 
 > **改端口？** 把 `port: 8095` 改成你想要的端口，重启即可。
+> **启用 HTTPS？** 设置 `cert_file` 和 `key_file` 即可。
+> **API 认证？** 设置环境变量 `JT_SIMULATE_TOKEN`（服务模式下必填，默认使用内置 token）。
 
 ---
 
@@ -398,7 +402,13 @@ A：修改 `configs/config.yaml` 后需要重启服务。
 A：支持。下载 Linux 版本，`chmod +x jt-simulate` 然后 `./jt-simulate serve -c configs/config.yaml` 即可。
 
 **Q：数据存在哪里？**
-A：默认使用内存存储，重启后清空。适合开发调试用途。
+A：设备配置默认持久化到 `data/devices.json` 文件，重启后自动恢复。采用原子写入（先写临时文件再 rename）+ 自动备份（`.bak` 文件），防止写入中途崩溃导致数据损坏。支持配置自定义存储路径。
+
+**Q：如何启用 HTTPS？**
+A：在配置文件中设置 `server.cert_file` 和 `server.key_file` 指向你的 TLS 证书和私钥文件即可。未设置时默认使用 HTTP。
+
+**Q：生产环境如何配置 API 认证？**
+A：设置环境变量 `JT_SIMULATE_TOKEN` 为你的自定义 token。服务模式下所有 API 请求需要在 `Authorization` 头中携带 `Bearer <token>`。WebSocket 连接通过查询参数 `?token=<token>` 认证。桌面模式（127.0.0.1）自动跳过认证。
 
 ---
 

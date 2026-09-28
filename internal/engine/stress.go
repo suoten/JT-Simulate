@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/suoten/jt-simulate/internal/simulator/base"
-	gbt32960sim "github.com/suoten/jt-simulate/internal/simulator/gbt32960"
-	jt808sim "github.com/suoten/jt-simulate/internal/simulator/jt808"
 )
 
 // StressConfig 压测配置
@@ -24,26 +22,26 @@ type StressConfig struct {
 
 // StressResult 压测结果
 type StressResult struct {
-	TotalDevices  int64         `json:"total_devices"`
-	OnlineDevices int64         `json:"online_devices"`
-	TotalMessages int64         `json:"total_messages"`
-	ErrorCount    int64         `json:"error_count"`
-	Duration      int           `json:"duration"`
-	AvgMsgRate    float64       `json:"avg_msg_rate"`  // 消息/秒
-	AvgLatency    float64       `json:"avg_latency"`  // 毫秒
-	StartTime     time.Time     `json:"start_time"`
-	EndTime       time.Time     `json:"end_time"`
-	Errors        []string      `json:"errors,omitempty"`
+	TotalDevices  int64     `json:"total_devices"`
+	OnlineDevices int64     `json:"online_devices"`
+	TotalMessages int64     `json:"total_messages"`
+	ErrorCount    int64     `json:"error_count"`
+	Duration      int       `json:"duration"`
+	AvgMsgRate    float64   `json:"avg_msg_rate"`  // 消息/秒
+	AvgLatency    float64   `json:"avg_latency"`  // 毫秒
+	StartTime     time.Time `json:"start_time"`
+	EndTime       time.Time `json:"end_time"`
+	Errors        []string  `json:"errors,omitempty"`
 }
 
 // StressEngine 压测引擎
 type StressEngine struct {
-	mu      sync.RWMutex
-	running bool
-	cancel  context.CancelFunc
-	result  *StressResult
-	msgCount  int64
-	errCount  int64
+	mu       sync.RWMutex
+	running  bool
+	cancel   context.CancelFunc
+	result   *StressResult
+	msgCount int64
+	errCount int64
 }
 
 // NewStressEngine 创建压测引擎
@@ -68,7 +66,7 @@ func (e *StressEngine) Run(ctx context.Context, cfg *StressConfig) (*StressResul
 	}()
 
 	result := &StressResult{
-		StartTime: time.Now(),
+		StartTime:   time.Now(),
 		TotalDevices: int64(cfg.DeviceCount),
 	}
 	e.result = result
@@ -86,7 +84,7 @@ func (e *StressEngine) Run(ctx context.Context, cfg *StressConfig) (*StressResul
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	var devices []interface{} // 保存仿真器引用用于停止
+	var devices []Simulator // 使用 Simulator 接口，而非 interface{}
 
 	for i := 0; i < cfg.DeviceCount; i++ {
 		select {
@@ -97,31 +95,29 @@ func (e *StressEngine) Run(ctx context.Context, cfg *StressConfig) (*StressResul
 
 		phone := incrementPhone(cfg.PhoneStart, i)
 		devCfg := &base.DeviceConfig{
-			ID:         phone,
-			Protocol:   protocol,
-			Phone:      phone,
-			Plate:      fmt.Sprintf("测%05d", i),
-			PlateColor: 2,
-			TargetAddr: cfg.TargetAddr,
-			AuthCode:   "stress_test",
-			ProvinceID: 11,
-			CityID:     100,
-			Manufacturer:  "STRESS",
-			TerminalModel: "S-100",
-			TerminalID:    fmt.Sprintf("%07d", i),
+			ID:               phone,
+			Protocol:         protocol,
+			Phone:            phone,
+			Plate:            fmt.Sprintf("测%05d", i),
+			PlateColor:       2,
+			TargetAddr:       cfg.TargetAddr,
+			AuthCode:         "stress_test",
+			ProvinceID:       11,
+			CityID:           100,
+			Manufacturer:     "STRESS",
+			TerminalModel:    "S-100",
+			TerminalID:       fmt.Sprintf("%07d", i),
 			HeartbeatInterval: 60,
 			LocationInterval:  cfg.Interval,
 			ReconnectInterval: 15,
-			StartLat: 39.9093 + float64(i)*0.0001,
-			StartLon: 116.3974 + float64(i)*0.0001,
+			StartLat:          39.9093 + float64(i)*0.0001,
+			StartLon:          116.3974 + float64(i)*0.0001,
 		}
 
-		var sim interface{}
-		switch protocol {
-		case "gbt32960":
-			sim = gbt32960sim.New(devCfg)
-		default:
-			sim = jt808sim.New(devCfg)
+		sim, err := createSimulator(devCfg)
+		if err != nil {
+			atomic.AddInt64(&e.errCount, 1)
+			continue
 		}
 
 		mu.Lock()
@@ -129,11 +125,13 @@ func (e *StressEngine) Run(ctx context.Context, cfg *StressConfig) (*StressResul
 		mu.Unlock()
 
 		wg.Add(1)
-		go func(s interface{}, idx int) {
+		go func(s Simulator, idx int) {
 			defer wg.Done()
 			// 设置发送回调——所有消息（注册/鉴权/心跳/位置）都计入总数
-			setStressCallbacks(s, &e.msgCount)
-			if err := stressOnline(s, ctx); err != nil {
+			s.SetOnSend(func(data []byte) {
+				atomic.AddInt64(&e.msgCount, 1)
+			})
+			if err := s.Online(ctx); err != nil {
 				atomic.AddInt64(&e.errCount, 1)
 				return
 			}
@@ -161,7 +159,7 @@ waitForDevices:
 
 	// 停止所有设备
 	for _, s := range devices {
-		stressOffline(s)
+		s.Offline()
 	}
 
 	result.EndTime = time.Now()
@@ -174,41 +172,6 @@ waitForDevices:
 	}
 
 	return result, nil
-}
-
-// setStressCallbacks 设置压测仿真器的发送回调
-func setStressCallbacks(sim interface{}, msgCount *int64) {
-	switch s := sim.(type) {
-	case *jt808sim.Simulator:
-		s.SetOnSend(func(data []byte) {
-			atomic.AddInt64(msgCount, 1)
-		})
-	case *gbt32960sim.Simulator:
-		s.SetOnSend(func(data []byte) {
-			atomic.AddInt64(msgCount, 1)
-		})
-	}
-}
-
-// stressOnline 启动仿真器
-func stressOnline(sim interface{}, ctx context.Context) error {
-	switch s := sim.(type) {
-	case *jt808sim.Simulator:
-		return s.Online(ctx)
-	case *gbt32960sim.Simulator:
-		return s.Online(ctx)
-	}
-	return fmt.Errorf("unknown simulator type")
-}
-
-// stressOffline 停止仿真器
-func stressOffline(sim interface{}) {
-	switch s := sim.(type) {
-	case *jt808sim.Simulator:
-		s.Offline()
-	case *gbt32960sim.Simulator:
-		s.Offline()
-	}
 }
 
 // Stop 停止压测
@@ -258,12 +221,12 @@ func (e *StressEngine) GetResult() *StressResult {
 }
 
 // incrementPhone 手机号递增
-func incrementPhone(base string, inc int) string {
-	if len(base) != 12 {
+func incrementPhone(baseStr string, inc int) string {
+	if len(baseStr) != 12 {
 		return fmt.Sprintf("0138000%05d", inc)
 	}
 	// 取后10位数字递增
-	result := []byte(base)
+	result := []byte(baseStr)
 	carry := inc
 	for i := 11; i >= 2 && carry > 0; i-- {
 		if result[i] < '0' || result[i] > '9' {

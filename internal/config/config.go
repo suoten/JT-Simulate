@@ -18,9 +18,11 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Host string `mapstructure:"host"`
-	Port int    `mapstructure:"port"`
-	Mode string `mapstructure:"mode"` // debug, release
+	Host     string `mapstructure:"host"`
+	Port     int    `mapstructure:"port"`
+	Mode     string `mapstructure:"mode"` // debug, release
+	CertFile string `mapstructure:"cert_file"` // TLS 证书文件路径（为空则使用 HTTP）
+	KeyFile  string `mapstructure:"key_file"`  // TLS 私钥文件路径
 }
 
 type LogConfig struct {
