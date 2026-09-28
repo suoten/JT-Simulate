@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/suoten/jt-simulate/internal/simulator/base"
+	gbt32960sim "github.com/suoten/jt-simulate/internal/simulator/gbt32960"
 	jt808sim "github.com/suoten/jt-simulate/internal/simulator/jt808"
 )
 
@@ -72,6 +73,11 @@ func (e *StressEngine) Run(ctx context.Context, cfg *StressConfig) (*StressResul
 	}
 	e.result = result
 
+	protocol := cfg.Protocol
+	if protocol == "" {
+		protocol = "jt808"
+	}
+
 	// 按批次创建设备
 	batchSize := 50
 	if cfg.DeviceCount < batchSize {
@@ -79,7 +85,8 @@ func (e *StressEngine) Run(ctx context.Context, cfg *StressConfig) (*StressResul
 	}
 
 	var wg sync.WaitGroup
-	var devices []*jt808sim.Simulator
+	var mu sync.Mutex
+	var devices []interface{} // 保存仿真器引用用于停止
 
 	for i := 0; i < cfg.DeviceCount; i++ {
 		select {
@@ -91,7 +98,7 @@ func (e *StressEngine) Run(ctx context.Context, cfg *StressConfig) (*StressResul
 		phone := incrementPhone(cfg.PhoneStart, i)
 		devCfg := &base.DeviceConfig{
 			ID:         phone,
-			Protocol:   cfg.Protocol,
+			Protocol:   protocol,
 			Phone:      phone,
 			Plate:      fmt.Sprintf("测%05d", i),
 			PlateColor: 2,
@@ -109,17 +116,27 @@ func (e *StressEngine) Run(ctx context.Context, cfg *StressConfig) (*StressResul
 			StartLon: 116.3974 + float64(i)*0.0001,
 		}
 
-		sim := jt808sim.New(devCfg)
+		var sim interface{}
+		switch protocol {
+		case "gbt32960":
+			sim = gbt32960sim.New(devCfg)
+		default:
+			sim = jt808sim.New(devCfg)
+		}
+
+		mu.Lock()
 		devices = append(devices, sim)
+		mu.Unlock()
 
 		wg.Add(1)
-		go func(s *jt808sim.Simulator, idx int) {
+		go func(s interface{}, idx int) {
 			defer wg.Done()
-			if err := s.Online(ctx); err != nil {
+			// 设置发送回调——所有消息（注册/鉴权/心跳/位置）都计入总数
+			setStressCallbacks(s, &e.msgCount)
+			if err := stressOnline(s, ctx); err != nil {
 				atomic.AddInt64(&e.errCount, 1)
 				return
 			}
-			atomic.AddInt64(&e.msgCount, 1) // 注册消息
 			atomic.AddInt64(&result.OnlineDevices, 1)
 		}(sim, i)
 
@@ -143,8 +160,8 @@ waitForDevices:
 	}
 
 	// 停止所有设备
-	for _, sim := range devices {
-		sim.Offline()
+	for _, s := range devices {
+		stressOffline(s)
 	}
 
 	result.EndTime = time.Now()
@@ -157,6 +174,41 @@ waitForDevices:
 	}
 
 	return result, nil
+}
+
+// setStressCallbacks 设置压测仿真器的发送回调
+func setStressCallbacks(sim interface{}, msgCount *int64) {
+	switch s := sim.(type) {
+	case *jt808sim.Simulator:
+		s.SetOnSend(func(data []byte) {
+			atomic.AddInt64(msgCount, 1)
+		})
+	case *gbt32960sim.Simulator:
+		s.SetOnSend(func(data []byte) {
+			atomic.AddInt64(msgCount, 1)
+		})
+	}
+}
+
+// stressOnline 启动仿真器
+func stressOnline(sim interface{}, ctx context.Context) error {
+	switch s := sim.(type) {
+	case *jt808sim.Simulator:
+		return s.Online(ctx)
+	case *gbt32960sim.Simulator:
+		return s.Online(ctx)
+	}
+	return fmt.Errorf("unknown simulator type")
+}
+
+// stressOffline 停止仿真器
+func stressOffline(sim interface{}) {
+	switch s := sim.(type) {
+	case *jt808sim.Simulator:
+		s.Offline()
+	case *gbt32960sim.Simulator:
+		s.Offline()
+	}
 }
 
 // Stop 停止压测

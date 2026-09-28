@@ -347,9 +347,10 @@ async function updateScenarioStatus(){
 function renderChecker(){
     document.getElementById('page-checker').innerHTML=
         '<h2 class="page-title">合规检查</h2>'+
-        '<div class="card guide-card"><div style="display:flex;align-items:flex-start;gap:12px"><div style="flex-shrink:0;color:var(--accent)">'+icon('info','card-icon')+'</div><div><div style="color:var(--accent);font-size:13px;font-weight:600;margin-bottom:6px">使用指南</div><div style="color:var(--text-muted);font-size:12px;line-height:1.8">1. 填写或粘贴一条 JT/T 808 报文（Hex格式）<br>2. 点击「开始检查」，系统会验证报文是否符合协议规范<br>3. 查看检查结果，包括通过/失败项和详细错误信息<br>4. 可在「报文工坊」生成测试报文后复制到此检查</div></div></div></div>'+
+        '<div class="card guide-card"><div style="display:flex;align-items:flex-start;gap:12px"><div style="flex-shrink:0;color:var(--accent)">'+icon('info','card-icon')+'</div><div><div style="color:var(--accent);font-size:13px;font-weight:600;margin-bottom:6px">使用指南</div><div style="color:var(--text-muted);font-size:12px;line-height:1.8">1. 选择协议类型<br>2. 填写或粘贴一条报文（Hex格式）<br>3. 点击「开始检查」，系统会验证报文是否符合协议规范<br>4. 查看检查结果，包括通过/失败项和详细错误信息<br>5. 可在「报文工坊」生成测试报文后复制到此检查</div></div></div></div>'+
         '<div class="card"><h3>'+icon('check')+'合规检查</h3>'+
-        '<div class="form-group"><label>JT/T 808 报文 (Hex)</label><textarea id="check-hex" rows="4" placeholder="7E 02 00 00 1C ..." style="font-family:Consolas,monospace">7E0200001C013800001234000100000000000000000260F7B406F015581388003C00B4260923142409BC7E</textarea></div>'+
+        '<div class="form-group"><label>协议类型</label><select id="check-protocol">'+pO()+'</select></div>'+
+        '<div class="form-group"><label>报文 (Hex)</label><textarea id="check-hex" rows="4" placeholder="7E 02 00 00 1C ..." style="font-family:Consolas,monospace">7E0200001C013800001234000100000000000000000260F7B406F015581388003C00B4260923142409BC7E</textarea></div>'+
         '<button class="btn btn-primary" id="check-start-btn" onclick="runCheck()">'+btnIcon('check')+'开始检查</button></div>'+
         '<div id="check-result" style="margin-top:16px"></div>'+
         '<div class="card" style="margin-top:16px"><h3>'+icon('bolt')+'Fuzz 健壮性测试</h3>'+
@@ -360,7 +361,7 @@ function renderChecker(){
 async function runCheck(){
     var hex=document.getElementById('check-hex').value.trim();
     if(!hex){toast('请输入报文Hex','error');return;}
-    var cfg={protocol:'jt808',hex:hex};
+    var cfg={protocol:document.getElementById('check-protocol').value,hex:hex};
     var btn=document.getElementById('check-start-btn');btn.disabled=true;btn.textContent='检查中...';
     try{
         var r=await fetch(API+'/check/compliance',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:JSON.stringify(cfg)});

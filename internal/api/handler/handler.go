@@ -2,18 +2,17 @@ package handler
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/suoten/jt-simulate/internal/checker"
 	"github.com/suoten/jt-simulate/internal/engine"
+	gbt32960sim "github.com/suoten/jt-simulate/internal/simulator/gbt32960"
+	jt808sim "github.com/suoten/jt-simulate/internal/simulator/jt808"
 	"github.com/suoten/jt-simulate/internal/simulator/base"
 	"github.com/suoten/jt-simulate/internal/workshop"
-	"github.com/suoten/jt-simulate/pkg/codec/jt808"
 	"github.com/suoten/jt-simulate/pkg/types"
 )
 
@@ -204,27 +203,15 @@ func (h *Handler) CheckCompliance(c *gin.Context) {
 		return
 	}
 
-	// 解析报文
-	hexStr := strings.TrimSpace(req.Hex)
-	hexStr = strings.ReplaceAll(hexStr, " ", "")
-	data, err := hex.DecodeString(hexStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": fmt.Sprintf("invalid hex: %v", err)})
-		return
+	if req.Protocol == "" {
+		req.Protocol = "jt808"
 	}
 
-	codec := jt808.NewCodec()
-	msg, err := codec.Decode(data)
+	result, err := h.checker.CheckRaw(req.Protocol, req.Hex)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
+		c.JSON(http.StatusOK, gin.H{"success": false, "error": err.Error()})
 		return
 	}
-
-	items := h.checker.CheckMessage(msg)
-	result := h.checker.GenerateReport(items)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"result":  result,
@@ -272,16 +259,124 @@ func (h *Handler) RunScenario(c *gin.Context) {
 	}
 
 	// 验证场景存在
-	if _, err := h.scenarioEngine.Get(req.Name); err != nil {
+	scenario, err := h.scenarioEngine.Get(req.Name)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	// 异步执行
+	// 确定目标地址
+	targetAddr := req.Target
+	if targetAddr == "" {
+		targetAddr = "127.0.0.1:7611"
+	}
+
+	// 创建一个临时仿真设备用于场景
+	phone := "013800009999"
+	devCfg := &base.DeviceConfig{
+		ID:         "scenario_" + phone,
+		Protocol:   scenario.Protocol,
+		Phone:      phone,
+		Plate:      "场景测试",
+		PlateColor: 1,
+		TargetAddr: targetAddr,
+		AuthCode:   "scenario_test",
+		ProvinceID:    11,
+		CityID:        100,
+		Manufacturer:  "SUOTEN",
+		TerminalModel: "JT-100",
+		TerminalID:    "9999999",
+		HeartbeatInterval: 60,
+		LocationInterval:  5,
+		ReconnectInterval: 15,
+		StartLat: 39.9093,
+		StartLon: 116.3974,
+	}
+
+	// 创建仿真器
+	var sim engine.Simulator
+	switch scenario.Protocol {
+	case "gbt32960":
+		sim = gbt32960sim.New(devCfg)
+	default:
+		sim = jt808sim.New(devCfg)
+	}
+
+	// 设置发送回调——计入消息统计
+	sim.SetOnSend(func(data []byte) {
+		// 统计通过引擎获取
+	})
+
+	// 连接目标平台
+	ctx := context.Background()
+	if err := sim.Online(ctx); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "error": fmt.Sprintf("设备连接失败: %v", err)})
+		return
+	}
+
+	// 异步执行场景步骤
 	go func() {
-		err := h.scenarioEngine.Run(context.Background(), req.Name, func(step *engine.ScenarioStep) error {
+		defer sim.Offline()
+
+		err := h.scenarioEngine.Run(ctx, req.Name, func(step *engine.ScenarioStep) error {
 			fmt.Printf("[场景] %s: %s (action=%s)\n", step.Name, step.Action, step.Params)
-			time.Sleep(500 * time.Millisecond) // 模拟步骤执行
+
+			switch step.Action {
+			case "send":
+				msgIDStr, _ := step.Params["msg_id"].(string)
+				fmt.Printf("[场景] 发送消息 %s\n", msgIDStr)
+				// 仿真器已在 Online 中自动注册/鉴权，这里不需要额外操作
+
+			case "location":
+				speedF, _ := step.Params["speed"].(float64)
+				if speedF == 0 {
+					if speedI, ok := step.Params["speed"].(int); ok {
+						speedF = float64(speedI)
+					}
+				}
+				lat, _ := step.Params["lat"].(float64)
+				lon, _ := step.Params["lon"].(float64)
+
+				// 如果指定了经纬度，更新设备位置
+				if lat != 0 && lon != 0 {
+					sim.(*jt808sim.Simulator).SetSpeed(speedF)
+					sim.(*jt808sim.Simulator).SetDirection(180)
+				} else {
+					// 使用默认位置 + 速度
+					sim.(*jt808sim.Simulator).SetSpeed(speedF)
+				}
+
+				// 手动发送一条位置上报
+				if s, ok := sim.(*jt808sim.Simulator); ok {
+					s.SendLocation(s.CurLat(), s.CurLon(), uint16(speedF*10), 180)
+				}
+
+			case "alarm":
+				alarmType, _ := step.Params["type"].(string)
+				var alarmFlag uint16
+				switch alarmType {
+				case "overspeed":
+					alarmFlag = 0x0001 // 超速报警位
+				case "fatigue":
+					alarmFlag = 0x0002 // 疲劳驾驶报警位
+				case "emergency":
+					alarmFlag = 0x0004 // 紧急报警位
+				default:
+					alarmFlag = 0x0001
+				}
+				if s, ok := sim.(*jt808sim.Simulator); ok {
+					s.SendAlarm(alarmFlag)
+				}
+
+			case "wait":
+				// 等待平台应答——已被 Delay 处理
+
+			case "disconnect":
+				sim.Offline()
+
+			default:
+				fmt.Printf("[场景] 未知 action: %s\n", step.Action)
+			}
 			return nil
 		})
 		if err != nil {

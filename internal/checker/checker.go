@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	gbt32960 "github.com/suoten/jt-simulate/pkg/codec/gbt32960"
 	"github.com/suoten/jt-simulate/pkg/codec/jt808"
+	"github.com/suoten/jt-simulate/pkg/codec/jt809"
 	"github.com/suoten/jt-simulate/pkg/types"
 )
 
@@ -53,6 +55,171 @@ func (c *Checker) CheckMessage(msg *types.Message) []CheckItem {
 	default:
 		items = c.checkGeneric(msg)
 	}
+
+	return items
+}
+
+// CheckRaw 检查原始 hex 报文（支持多协议）
+func (c *Checker) CheckRaw(protocol, hexStr string) (*CheckResult, error) {
+	hexStr = strings.TrimSpace(hexStr)
+	hexStr = strings.ReplaceAll(hexStr, " ", "")
+
+	switch protocol {
+	case "jt808", "jt1078", "jt905", "jt1045", "jt1253":
+		return c.checkRawJT808(hexStr, protocol)
+	case "jt809":
+		return c.checkRawJT809(hexStr)
+	case "gbt32960":
+		return c.checkRawGBT32960(hexStr)
+	default:
+		return c.checkRawJT808(hexStr, "jt808")
+	}
+}
+
+// checkRawJT808 检查 JT808 帧格式报文
+func (c *Checker) checkRawJT808(hexStr, protocol string) (*CheckResult, error) {
+	data, err := hexDecode(hexStr)
+	if err != nil {
+		return &CheckResult{
+			Items: []CheckItem{{ID: "FMT-001", Name: "Hex解码", Category: "格式", Level: "error", Passed: false, Message: err.Error()}},
+		}, nil
+	}
+
+	codec := jt808.NewCodec()
+	msg, err := codec.Decode(data)
+	if err != nil {
+		return &CheckResult{
+			Items: []CheckItem{{ID: "DEC-001", Name: "报文解码", Category: "解码", Level: "error", Passed: false, Message: "解码失败: " + err.Error()}},
+		}, nil
+	}
+
+	items := c.CheckMessage(msg)
+
+	// 额外的帧级检查
+	items = append(items, c.checkFrame(data)...)
+
+	return c.GenerateReport(items), nil
+}
+
+// checkRawJT809 检查 JT809 帧格式报文
+func (c *Checker) checkRawJT809(hexStr string) (*CheckResult, error) {
+	data, err := hexDecode(hexStr)
+	if err != nil {
+		return &CheckResult{
+			Items: []CheckItem{{ID: "FMT-001", Name: "Hex解码", Category: "格式", Level: "error", Passed: false, Message: err.Error()}},
+		}, nil
+	}
+
+	codec := jt809.NewCodec()
+	h, bodyData, err := codec.Decode(data)
+	if err != nil {
+		return &CheckResult{
+			Items: []CheckItem{{ID: "DEC-001", Name: "报文解码", Category: "解码", Level: "error", Passed: false, Message: "解码失败: " + err.Error()}},
+		}, nil
+	}
+
+	var items []CheckItem
+
+	// 检查消息序列号
+	snOK := h.MsgSN > 0
+	items = append(items, CheckItem{
+		ID: "J809-001", Name: "消息序号", Category: "JT809",
+		Level: "warning", Passed: snOK,
+		Message: fmt.Sprintf("消息序号: %d", h.MsgSN),
+	})
+
+	// 检查 GNSSCenterID
+	centerOK := h.GNSSCenterID > 0
+	items = append(items, CheckItem{
+		ID: "J809-002", Name: "GNSS中心ID", Category: "JT809",
+		Level: "warning", Passed: centerOK,
+		Message: fmt.Sprintf("GNSS中心ID: %d", h.GNSSCenterID),
+	})
+
+	// 检查消息体长度
+	bodyOK := len(bodyData) > 0 || h.MsgID == jt809.MsgIDUpLinktestReq
+	items = append(items, CheckItem{
+		ID: "J809-003", Name: "消息体", Category: "JT809",
+		Level: "info", Passed: bodyOK,
+		Message: fmt.Sprintf("消息体长度: %d bytes", len(bodyData)),
+	})
+
+	return c.GenerateReport(items), nil
+}
+
+// checkRawGBT32960 检查 GB/T 32960 帧格式报文
+func (c *Checker) checkRawGBT32960(hexStr string) (*CheckResult, error) {
+	data, err := hexDecode(hexStr)
+	if err != nil {
+		return &CheckResult{
+			Items: []CheckItem{{ID: "FMT-001", Name: "Hex解码", Category: "格式", Level: "error", Passed: false, Message: err.Error()}},
+		}, nil
+	}
+
+	pkt, err := gbt32960.Decode(data)
+	if err != nil {
+		return &CheckResult{
+			Items: []CheckItem{{ID: "DEC-001", Name: "报文解码", Category: "解码", Level: "error", Passed: false, Message: "解码失败: " + err.Error()}},
+		}, nil
+	}
+
+	var items []CheckItem
+
+	// 检查 VIN
+	vinOK := len(pkt.Header.VIN) == 17
+	items = append(items, CheckItem{
+		ID: "GB-001", Name: "VIN长度", Category: "GB32960",
+		Level: "error", Passed: vinOK,
+		Message: fmt.Sprintf("VIN: '%s' (17位)", pkt.Header.VIN),
+	})
+
+	// 检查命令标识
+	cmdOK := pkt.Header.CmdFlag >= 0x01 && pkt.Header.CmdFlag <= 0x07
+	items = append(items, CheckItem{
+		ID: "GB-002", Name: "命令标识", Category: "GB32960",
+		Level: "error", Passed: cmdOK,
+		Message: fmt.Sprintf("命令标识: 0x%02X (%s)", pkt.Header.CmdFlag, gbt32960.MsgTypeString(pkt.Header.CmdFlag)),
+	})
+
+	// 检查加密方式
+	encOK := pkt.Header.EncryptType <= 3
+	items = append(items, CheckItem{
+		ID: "GB-003", Name: "加密方式", Category: "GB32960",
+		Level: "warning", Passed: encOK,
+		Message: fmt.Sprintf("加密方式: %d", pkt.Header.EncryptType),
+	})
+
+	return c.GenerateReport(items), nil
+}
+
+// checkFrame 帧级检查
+func (c *Checker) checkFrame(data []byte) []CheckItem {
+	var items []CheckItem
+
+	// 检查首尾分隔符
+	delimOK := len(data) >= 2 && data[0] == 0x7E && data[len(data)-1] == 0x7E
+	items = append(items, CheckItem{
+		ID: "FRM-001", Name: "帧分隔符", Category: "帧结构",
+		Level: "error", Passed: delimOK,
+		Message: "首尾必须为0x7E",
+	})
+
+	// 检查最小帧长
+	lenOK := len(data) >= 15 // 最小帧长
+	items = append(items, CheckItem{
+		ID: "FRM-002", Name: "帧长度", Category: "帧结构",
+		Level: "error", Passed: lenOK,
+		Message: fmt.Sprintf("帧长: %d bytes", len(data)),
+	})
+
+	// 校验码验证
+	codec := jt808.NewCodec()
+	checksumOK := codec.VerifyChecksum(data[1 : len(data)-1])
+	items = append(items, CheckItem{
+		ID: "FRM-003", Name: "校验码", Category: "帧结构",
+		Level: "error", Passed: checksumOK,
+		Message: fmt.Sprintf("XOR校验: %v", checksumOK),
+	})
 
 	return items
 }
@@ -117,6 +284,14 @@ func (c *Checker) checkLocation(msg *types.Message) []CheckItem {
 			Message: fmt.Sprintf("报警标志: 0x%08X", loc.AlarmFlag),
 		})
 	}
+
+	// 检查海拔范围
+	altOK := loc.Altitude <= 30000 // 30km
+	items = append(items, CheckItem{
+		ID: "LOC-016", Name: "海拔范围", Category: "位置上报",
+		Level: "warning", Passed: altOK,
+		Message: fmt.Sprintf("海拔 %d m", loc.Altitude),
+	})
 
 	return items
 }
@@ -270,4 +445,27 @@ func (c *Checker) GenerateReport(items []CheckItem) *CheckResult {
 	}
 
 	return result
+}
+
+// hexDecode 简单 hex 解码
+func hexDecode(s string) ([]byte, error) {
+	// 移除空格和 0x 前缀
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ReplaceAll(s, "0x", "")
+	s = strings.ReplaceAll(s, "0X", "")
+
+	if len(s)%2 != 0 {
+		return nil, fmt.Errorf("odd hex length: %d", len(s))
+	}
+
+	data := make([]byte, len(s)/2)
+	for i := 0; i < len(data); i++ {
+		var b byte
+		_, err := fmt.Sscanf(s[i*2:i*2+2], "%x", &b)
+		if err != nil {
+			return nil, fmt.Errorf("hex decode error at position %d: %w", i, err)
+		}
+		data[i] = b
+	}
+	return data, nil
 }

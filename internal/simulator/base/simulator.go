@@ -3,6 +3,8 @@ package base
 import (
 	"context"
 	"fmt"
+	"log"
+	"math"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -60,6 +62,13 @@ type DeviceConfig struct {
 	Route   string  `json:"route"`
 	StartLat float64 `json:"start_lat"`
 	StartLon float64 `json:"start_lon"`
+
+	// 运行时状态
+	curLat  float64
+	curLon  float64
+	curSpeed    float64 // km/h
+	curDir      uint16  // 0-359
+	routeIndex  int
 }
 
 // MessageHandler 消息处理器
@@ -77,6 +86,7 @@ type Simulator struct {
 	seqNum     uint16
 	seqMu      sync.Mutex
 	cancel     context.CancelFunc
+	ctx        context.Context
 	wg         sync.WaitGroup
 	onRecv     MessageHandler
 	onRawRecv  RawDataHandler
@@ -96,6 +106,14 @@ func NewSimulator(cfg *DeviceConfig) *Simulator {
 	if cfg.ReconnectInterval <= 0 {
 		cfg.ReconnectInterval = 15
 	}
+	cfg.curLat = cfg.StartLat
+	cfg.curLon = cfg.StartLon
+	if cfg.curLat == 0 {
+		cfg.curLat = 39.9093
+	}
+	if cfg.curLon == 0 {
+		cfg.curLon = 116.3974
+	}
 	return &Simulator{
 		config: cfg,
 	}
@@ -114,8 +132,11 @@ func (s *Simulator) State() DeviceState {
 // SetState 设置状态
 func (s *Simulator) SetState(state DeviceState) {
 	s.state.Store(int32(state))
-	if s.onState != nil {
-		s.onState(state)
+	s.mu.RLock()
+	fn := s.onState
+	s.mu.RUnlock()
+	if fn != nil {
+		fn(state)
 	}
 }
 
@@ -155,8 +176,14 @@ func (s *Simulator) NextSeqNum() uint16 {
 	return s.seqNum
 }
 
-// Connect 连接目标平台
+// Connect 连接目标平台（带重连）
 func (s *Simulator) Connect(ctx context.Context) error {
+	s.ctx = ctx
+	return s.connectAndRun(ctx)
+}
+
+// connectAndRun 连接并启动接收循环
+func (s *Simulator) connectAndRun(ctx context.Context) error {
 	s.SetState(StateConnecting)
 
 	var d net.Dialer
@@ -177,6 +204,56 @@ func (s *Simulator) Connect(ctx context.Context) error {
 	go s.recvLoop(ctx)
 
 	return nil
+}
+
+// StartReconnectLoop 启动自动重连循环
+func (s *Simulator) StartReconnectLoop(ctx context.Context, onReconnect func(ctx context.Context) error) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			if s.State() == StateOffline {
+				interval := s.config.ReconnectInterval
+				if interval <= 0 {
+					interval = 15
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Duration(interval) * time.Second):
+				}
+
+				if s.State() != StateOffline {
+					continue
+				}
+				log.Printf("[%s] 尝试重连 %s", s.config.Phone, s.config.TargetAddr)
+				if err := s.connectAndRun(ctx); err != nil {
+					log.Printf("[%s] 重连失败: %v", s.config.Phone, err)
+					continue
+				}
+				if onReconnect != nil {
+					if err := onReconnect(ctx); err != nil {
+						log.Printf("[%s] 重连后重新上线失败: %v", s.config.Phone, err)
+						s.Disconnect()
+						continue
+					}
+				}
+				log.Printf("[%s] 重连成功", s.config.Phone)
+			} else {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+				}
+			}
+		}
+	}()
 }
 
 // Disconnect 断开连接
@@ -214,10 +291,11 @@ func (s *Simulator) Send(data []byte) error {
 	}
 
 	s.mu.RLock()
-	if s.onSend != nil {
-		s.onSend(data)
-	}
+	fn := s.onSend
 	s.mu.RUnlock()
+	if fn != nil {
+		fn(data)
+	}
 
 	return nil
 }
@@ -312,4 +390,47 @@ func (s *Simulator) StartLocationReport(ctx context.Context, reportFunc func() e
 			}
 		}
 	}()
+}
+
+// MoveAlongRoute 沿路线移动一个步长，返回新的经纬度
+func (s *Simulator) MoveAlongRoute() (lat, lon float64) {
+	// 简单模拟：沿当前方向移动一定距离
+	// 1 km/h 在纬度方向约 0.00001 度/秒
+	interval := float64(s.config.LocationInterval)
+	distance := s.config.curSpeed * 1000 / 3600 * interval // 米
+	// 1度纬度 ≈ 111000米
+	latDelta := distance / 111000 * math.Cos(float64(s.config.curDir)*math.Pi/180)
+	lonDelta := distance / (111000 * math.Cos(s.config.curLat*math.Pi/180)) * math.Sin(float64(s.config.curDir)*math.Pi/180)
+	s.config.curLat += latDelta
+	s.config.curLon += lonDelta
+	return s.config.curLat, s.config.curLon
+}
+
+// SetSpeed 设置当前速度
+func (s *Simulator) SetSpeed(kmh float64) {
+	s.config.curSpeed = kmh
+}
+
+// SetDirection 设置当前方向
+func (s *Simulator) SetDirection(dir uint16) {
+	s.config.curDir = dir
+}
+
+// CurLat 返回当前纬度
+func (s *Simulator) CurLat() float64 { return s.config.curLat }
+
+// CurLon 返回当前经度
+func (s *Simulator) CurLon() float64 { return s.config.curLon }
+
+// CurSpeed 返回当前速度
+func (s *Simulator) CurSpeed() float64 { return s.config.curSpeed }
+
+// CurDir 返回当前方向
+func (s *Simulator) CurDir() uint16 { return s.config.curDir }
+
+// AdvanceRoute 推进路线并返回新坐标和方向
+func (s *Simulator) AdvanceRoute(speedKmh float64) (lat, lon float64, direction uint16) {
+	s.config.curSpeed = speedKmh
+	s.MoveAlongRoute()
+	return s.config.curLat, s.config.curLon, s.config.curDir
 }

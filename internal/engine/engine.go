@@ -7,12 +7,25 @@ import (
 	"sync/atomic"
 
 	"github.com/suoten/jt-simulate/internal/simulator/base"
+	gbt32960sim "github.com/suoten/jt-simulate/internal/simulator/gbt32960"
 	jt808sim "github.com/suoten/jt-simulate/internal/simulator/jt808"
+	"github.com/suoten/jt-simulate/internal/storage"
 	"github.com/suoten/jt-simulate/pkg/codec/jt808"
 )
 
 // BroadcastFunc 消息广播函数（用于WebSocket实时监控）
 type BroadcastFunc func(direction, phone, msgName, msgID string, raw []byte)
+
+// Simulator 接口：统一仿真器行为
+type Simulator interface {
+	Online(ctx context.Context) error
+	Offline()
+	Config() *base.DeviceConfig
+	State() base.DeviceState
+	SetOnState(func(base.DeviceState))
+	SetOnSend(func([]byte))
+	SetOnRawRecv(base.RawDataHandler)
+}
 
 // Engine 仿真引擎
 type Engine struct {
@@ -20,12 +33,13 @@ type Engine struct {
 	devices   map[string]*DeviceInfo
 	stats     EngineStats
 	broadcast BroadcastFunc
+	storage   *storage.Storage
 }
 
 // DeviceInfo 设备信息
 type DeviceInfo struct {
 	Config   *base.DeviceConfig
-	Simulator interface{} // *jt808sim.Simulator 或其他协议仿真器
+	Simulator interface{} // Simulator 接口实现
 	State    base.DeviceState
 }
 
@@ -40,12 +54,74 @@ type EngineStats struct {
 func New() *Engine {
 	return &Engine{
 		devices: make(map[string]*DeviceInfo),
+		storage: storage.New("data/devices.json"),
 	}
+}
+
+// SetStorage 设置存储
+func (e *Engine) SetStorage(s *storage.Storage) {
+	e.storage = s
+}
+
+// LoadDevices 从持久化存储加载设备
+func (e *Engine) LoadDevices() error {
+	if e.storage == nil {
+		return nil
+	}
+	devices, err := e.storage.LoadDevices()
+	if err != nil {
+		return fmt.Errorf("load devices: %w", err)
+	}
+	for _, cfg := range devices {
+		sim, err := createSimulator(cfg)
+		if err != nil {
+			continue // 跳过无法创建的设备
+		}
+		e.mu.Lock()
+		e.devices[cfg.ID] = &DeviceInfo{
+			Config:    cfg,
+			Simulator: sim,
+			State:     base.StateOffline,
+		}
+		e.mu.Unlock()
+		atomic.AddInt64(&e.stats.TotalDevices, 1)
+	}
+	return nil
+}
+
+// SaveDevices 保存所有设备到持久化存储
+func (e *Engine) SaveDevices() error {
+	if e.storage == nil {
+		return nil
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	list := make([]*base.DeviceConfig, 0, len(e.devices))
+	for _, info := range e.devices {
+		list = append(list, info.Config)
+	}
+	return e.storage.SaveDevices(list)
 }
 
 // SetBroadcast 设置消息广播函数（由API层注入WebSocket Hub）
 func (e *Engine) SetBroadcast(fn BroadcastFunc) {
 	e.broadcast = fn
+}
+
+// createSimulator 根据协议创建仿真器
+func createSimulator(cfg *base.DeviceConfig) (Simulator, error) {
+	switch cfg.Protocol {
+	case "jt808", "jt1078", "jt905", "jt1045", "jt1253":
+		// 这些协议都使用 JT808 帧格式，JT808 仿真器即可处理
+		return jt808sim.New(cfg), nil
+	case "gbt32960":
+		return gbt32960sim.New(cfg), nil
+	case "jt809":
+		// JT809 是平台间协议，使用 JT808 仿真器作为基础（平台间协议的仿真场景较少）
+		return jt808sim.New(cfg), nil
+	default:
+		return nil, fmt.Errorf("unsupported protocol: %s", cfg.Protocol)
+	}
 }
 
 // CreateDevice 创建设备
@@ -57,12 +133,9 @@ func (e *Engine) CreateDevice(cfg *base.DeviceConfig) error {
 		return fmt.Errorf("device %s already exists", cfg.ID)
 	}
 
-	var sim interface{}
-	switch cfg.Protocol {
-	case "jt808":
-		sim = jt808sim.New(cfg)
-	default:
-		return fmt.Errorf("unsupported protocol: %s", cfg.Protocol)
+	sim, err := createSimulator(cfg)
+	if err != nil {
+		return err
 	}
 
 	info := &DeviceInfo{
@@ -72,6 +145,9 @@ func (e *Engine) CreateDevice(cfg *base.DeviceConfig) error {
 	}
 	e.devices[cfg.ID] = info
 	atomic.AddInt64(&e.stats.TotalDevices, 1)
+
+	// 持久化
+	go e.SaveDevices()
 
 	return nil
 }
@@ -91,60 +167,60 @@ func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
 		return fmt.Errorf("device %s is already running", deviceID)
 	}
 
-	switch s := info.Simulator.(type) {
-	case *jt808sim.Simulator:
-		s.SetOnState(func(state base.DeviceState) {
-			e.mu.Lock()
-			info.State = state
-			if state == base.StateOnline {
-				atomic.AddInt64(&e.stats.OnlineDevices, 1)
-			} else if state == base.StateOffline {
-				// 只在之前是在线状态时才减1，避免负数
-				cur := atomic.LoadInt64(&e.stats.OnlineDevices)
-				if cur > 0 {
-					atomic.AddInt64(&e.stats.OnlineDevices, -1)
-				}
-			}
-			e.mu.Unlock()
-		})
-		// 设置发送回调——广播到WebSocket用于实时监控
-		s.SetOnSend(func(data []byte) {
-			atomic.AddInt64(&e.stats.TotalMessages, 1)
-			if e.broadcast != nil {
-				codec := jt808.NewCodec()
-				if msg, err := codec.Decode(data); err == nil {
-					msgName := jt808.MsgName(msg.Header.MsgID)
-					e.broadcast("up", info.Config.Phone, msgName,
-						fmt.Sprintf("0x%04X", msg.Header.MsgID), data)
-				} else {
-					// 即使解码失败也广播原始数据
-					e.broadcast("up", info.Config.Phone, "未知", "", data)
-				}
-			}
-		})
-		// 设置接收回调——广播平台下发的消息
-		s.SetOnRawRecv(func(data []byte) {
-			if e.broadcast != nil {
-				codec := jt808.NewCodec()
-				frames := jt808.SplitByDelimiter(data)
-				if len(frames) == 0 {
-					frames = [][]byte{data}
-				}
-				for _, frame := range frames {
-					if msg, err := codec.Decode(frame); err == nil {
-						msgName := jt808.MsgName(msg.Header.MsgID)
-						e.broadcast("down", info.Config.Phone, msgName,
-							fmt.Sprintf("0x%04X", msg.Header.MsgID), frame)
-					} else {
-						e.broadcast("down", info.Config.Phone, "未知", "", frame)
-					}
-				}
-			}
-		})
-		return s.Online(ctx)
+	sim, ok := info.Simulator.(Simulator)
+	if !ok {
+		return fmt.Errorf("simulator does not implement Simulator interface")
 	}
 
-	return fmt.Errorf("unknown simulator type")
+	sim.SetOnState(func(state base.DeviceState) {
+		e.mu.Lock()
+		info.State = state
+		if state == base.StateOnline {
+			atomic.AddInt64(&e.stats.OnlineDevices, 1)
+		} else if state == base.StateOffline {
+			// 只在之前是在线状态时才减1，避免负数
+			cur := atomic.LoadInt64(&e.stats.OnlineDevices)
+			if cur > 0 {
+				atomic.AddInt64(&e.stats.OnlineDevices, -1)
+			}
+		}
+		e.mu.Unlock()
+	})
+	// 设置发送回调——广播到WebSocket用于实时监控 + 计入消息统计
+	sim.SetOnSend(func(data []byte) {
+		atomic.AddInt64(&e.stats.TotalMessages, 1)
+		if e.broadcast != nil {
+			// 尝试解码消息名称
+			codec := jt808.NewCodec()
+			if msg, err := codec.Decode(data); err == nil {
+				msgName := jt808.MsgName(msg.Header.MsgID)
+				e.broadcast("up", info.Config.Phone, msgName,
+					fmt.Sprintf("0x%04X", msg.Header.MsgID), data)
+			} else {
+				e.broadcast("up", info.Config.Phone, info.Config.Protocol, "", data)
+			}
+		}
+	})
+	// 设置接收回调——广播平台下发的消息
+	sim.SetOnRawRecv(func(data []byte) {
+		if e.broadcast != nil {
+			codec := jt808.NewCodec()
+			frames := jt808.SplitByDelimiter(data)
+			if len(frames) == 0 {
+				frames = [][]byte{data}
+			}
+			for _, frame := range frames {
+				if msg, err := codec.Decode(frame); err == nil {
+					msgName := jt808.MsgName(msg.Header.MsgID)
+					e.broadcast("down", info.Config.Phone, msgName,
+						fmt.Sprintf("0x%04X", msg.Header.MsgID), frame)
+				} else {
+					e.broadcast("down", info.Config.Phone, "未知", "", frame)
+				}
+			}
+		}
+	})
+	return sim.Online(ctx)
 }
 
 // StopDevice 停止设备
@@ -162,13 +238,12 @@ func (e *Engine) StopDevice(deviceID string) error {
 		return nil
 	}
 
-	switch s := info.Simulator.(type) {
-	case *jt808sim.Simulator:
-		s.Offline()
-		return nil
+	sim, ok := info.Simulator.(Simulator)
+	if !ok {
+		return fmt.Errorf("simulator does not implement Simulator interface")
 	}
-
-	return fmt.Errorf("unknown simulator type")
+	sim.Offline()
+	return nil
 }
 
 // DeleteDevice 删除设备
@@ -183,9 +258,8 @@ func (e *Engine) DeleteDevice(deviceID string) error {
 
 	// 先停止
 	if info.State != base.StateOffline {
-		switch s := info.Simulator.(type) {
-		case *jt808sim.Simulator:
-			s.Offline()
+		if sim, ok := info.Simulator.(Simulator); ok {
+			sim.Offline()
 		}
 		// 减少在线设备计数
 		cur := atomic.LoadInt64(&e.stats.OnlineDevices)
@@ -196,6 +270,9 @@ func (e *Engine) DeleteDevice(deviceID string) error {
 
 	delete(e.devices, deviceID)
 	atomic.AddInt64(&e.stats.TotalDevices, -1)
+
+	// 持久化
+	go e.SaveDevices()
 
 	return nil
 }
@@ -239,9 +316,8 @@ func (e *Engine) StopAll() {
 	defer e.mu.RUnlock()
 
 	for _, info := range e.devices {
-		switch s := info.Simulator.(type) {
-		case *jt808sim.Simulator:
-			s.Offline()
+		if sim, ok := info.Simulator.(Simulator); ok {
+			sim.Offline()
 		}
 	}
 }

@@ -78,6 +78,7 @@ func getFrontendFS() fs.FS {
 // runDesktop 启动 Wails 桌面应用（双击 exe 默认行为）
 func runDesktop(cmd *cobra.Command, args []string) {
 	eng := engine.New()
+	eng.LoadDevices() // 加载持久化设备
 	ws := workshop.New()
 	server := api.NewServer(eng, ws)
 	frontendFS := getFrontendFS()
@@ -121,6 +122,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	fmt.Printf("按 Ctrl+C 退出\n\n")
 
 	eng := engine.New()
+	eng.LoadDevices() // 加载持久化设备
 	ws := workshop.New()
 
 	server := api.NewServer(eng, ws)

@@ -28,13 +28,12 @@ func New(cfg *base.DeviceConfig) *Simulator {
 	return s
 }
 
-// Online 上线（注册→鉴权→心跳→位置上报）
+// Online 上线（注册→鉴权→心跳→位置上报），带自动重连
 func (s *Simulator) Online(ctx context.Context) error {
 	if err := s.Connect(ctx); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
 
-	// 发送注册
 	if err := s.sendRegister(); err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
@@ -52,6 +51,22 @@ func (s *Simulator) Online(ctx context.Context) error {
 
 	// 启动定时位置上报
 	s.StartLocationReport(ctx, s.sendLocation)
+
+	// 启动自动重连
+	s.StartReconnectLoop(ctx, func(ctx context.Context) error {
+		// 重连后重新注册+鉴权
+		if err := s.sendRegister(); err != nil {
+			return err
+		}
+		time.Sleep(300 * time.Millisecond)
+		if err := s.sendAuth(); err != nil {
+			return err
+		}
+		// 重启心跳和位置上报
+		s.StartHeartbeat(ctx, s.sendHeartbeat)
+		s.StartLocationReport(ctx, s.sendLocation)
+		return nil
+	})
 
 	return nil
 }
@@ -105,11 +120,11 @@ func (s *Simulator) autoRespond(msg *types.Message) {
 		respHeader.MsgID = jt808.MsgIDLocation
 		now := time.Now()
 		body := &jt808.LocationMessage{
-			Latitude:  cfg.StartLat,
-			Longitude: cfg.StartLon,
+			Latitude:  s.CurLat(),
+			Longitude: s.CurLon(),
 			Altitude:  5000,
-			Speed:     600,
-			Direction: 180,
+Speed:     uint16(s.CurSpeed() * 10),
+		Direction: s.CurDir(),
 			Time:      now.Format("060102150405"),
 		}
 		s.sendResp(respHeader, body)
@@ -280,9 +295,12 @@ func (s *Simulator) sendHeartbeat() error {
 	return s.Send(data)
 }
 
-// sendLocation 发送位置上报
+// sendLocation 发送位置上报（沿路线移动）
 func (s *Simulator) sendLocation() error {
 	cfg := s.Config()
+	// 沿路线移动
+	s.MoveAlongRoute()
+
 	header := &types.MessageHeader{
 		MsgID:       jt808.MsgIDLocation,
 		Phone:       cfg.Phone,
@@ -292,15 +310,14 @@ func (s *Simulator) sendLocation() error {
 	}
 
 	now := time.Now()
-	timeStr := now.Format("060102150405")
 
 	body := &jt808.LocationMessage{
-		Latitude:  cfg.StartLat,
-		Longitude: cfg.StartLon,
+		Latitude:  s.CurLat(),
+		Longitude: s.CurLon(),
 		Altitude:  5000,
-		Speed:     600, // 60.0 km/h (单位0.1km/h)
-		Direction: 180,
-		Time:      timeStr,
+		Speed:     uint16(s.CurSpeed() * 10), // 单位0.1km/h
+		Direction: s.CurDir(),
+		Time:      now.Format("060102150405"),
 	}
 
 	data, err := s.codec.Encode(header, body)
@@ -354,11 +371,11 @@ func (s *Simulator) SendAlarm(alarmFlag uint16) error {
 	now := time.Now()
 	body := &jt808.LocationMessage{
 		AlarmFlag:  uint32(alarmFlag),
-		Latitude:   cfg.StartLat,
-		Longitude:  cfg.StartLon,
+		Latitude:   s.CurLat(),
+		Longitude:  s.CurLon(),
 		Altitude:   5000,
-		Speed:      0,
-		Direction:  0,
+		Speed:      uint16(s.CurSpeed() * 10),
+		Direction:  s.CurDir(),
 		Time:       now.Format("060102150405"),
 	}
 
