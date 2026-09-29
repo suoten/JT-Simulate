@@ -216,8 +216,9 @@ func (s *Server) handleWSAuth(c *gin.Context) {
 // authMiddleware API token 认证中间件（使用 constant-time comparison 防时序攻击）
 func authMiddleware(token string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 健康检查不需要认证
 		path := c.Request.URL.Path
+
+		// 健康检查不需要认证
 		if path == "/api/v1/health" {
 			c.Next()
 			return
@@ -225,6 +226,21 @@ func authMiddleware(token string) gin.HandlerFunc {
 
 		// WebSocket 路由通过 handleWSAuth 单独认证
 		if strings.HasPrefix(path, "/ws") || strings.HasPrefix(path, "/api/v1/ws") {
+			c.Next()
+			return
+		}
+
+		// 前端静态文件（HTML/CSS/JS/图片等）不需要认证
+		if !strings.HasPrefix(path, "/api/") {
+			c.Next()
+			return
+		}
+
+		// 本地访问（127.0.0.1 / localhost）免认证，方便开发和使用
+		// 生产环境如果需要认证，请通过反向代理或网络层控制访问
+		remoteAddr := c.Request.RemoteAddr
+		if strings.HasPrefix(remoteAddr, "127.0.0.1:") || strings.HasPrefix(remoteAddr, "[::1]:") ||
+			strings.HasPrefix(remoteAddr, "localhost:") {
 			c.Next()
 			return
 		}

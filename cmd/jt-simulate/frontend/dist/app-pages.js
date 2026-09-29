@@ -128,11 +128,11 @@ function renderDevices(){
 async function createDevice(){
     var cfg={id:document.getElementById('dev-id').value,protocol:document.getElementById('dev-protocol').value,phone:document.getElementById('dev-phone').value,plate:document.getElementById('dev-plate').value,target_addr:document.getElementById('dev-target').value,location_interval:parseInt(document.getElementById('dev-interval').value)||30,heartbeat_interval:parseInt(document.getElementById('dev-heartbeat').value)||60};
     if(!cfg.phone){toast('请填写终端手机号','error');return;}
-    try{var r=await fetch(API+'/devices',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:JSON.stringify(cfg)});var d=await r.json();if(d.success){toast('设备创建成功','success');loadDevices();}else toast('创建失败: '+(d.error||'未知错误'),'error');}catch(e){toast('请求失败: '+e.message,'error');}
+    try{var r=await _fetch(API+'/devices',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:JSON.stringify(cfg)});var d=await r.json();if(d.success){toast('设备创建成功','success');loadDevices();}else toast('创建失败: '+(d.error||'未知错误'),'error');}catch(e){toast('请求失败: '+e.message,'error');}
 }
 async function loadDevices(){
     try{
-        var r=await fetch(API+'/devices'),d=await r.json(),list=document.getElementById('dev-list');if(!list)return;
+        var r=await _fetch(API+'/devices'),d=await r.json(),list=document.getElementById('dev-list');if(!list)return;
         if(!d.devices||d.devices.length===0){list.innerHTML='<div class="empty-state">'+icon('empty','empty-icon')+'<p>暂无设备，请在左侧创建</p></div>';return;}
         var h='<table><thead><tr><th>ID</th><th>协议</th><th>手机号</th><th>车牌</th><th>目标地址</th><th>上报间隔</th><th>状态</th><th>操作</th></tr></thead><tbody>';
         d.devices.forEach(function(dev){
@@ -155,7 +155,7 @@ function confirmDelDevice(id){
 }
 async function showDeviceDetail(id){
     try{
-        var r=await fetch(API+'/devices/'+id);var d=await r.json();
+        var r=await _fetch(API+'/devices/'+id);var d=await r.json();
         var overlay=document.createElement('div');
         overlay.className='modal-overlay';
         overlay.onclick=function(e){if(e.target===overlay)overlay.remove();};
@@ -182,7 +182,7 @@ async function showDeviceDetail(id){
 }
 async function startDevice(id){
     try{
-        var r=await fetch(API+'/devices/'+id+'/start',{method:'POST'});
+        var r=await _fetch(API+'/devices/'+id+'/start',{method:'POST'});
         var d=await r.json();
         if(d.success){toast(d.message||'设备已启动','success');}
         else{
@@ -193,10 +193,10 @@ async function startDevice(id){
     }catch(e){toast(e.message,'error');}
 }
 async function stopDevice(id){
-    try{var r=await fetch(API+'/devices/'+id+'/stop',{method:'POST'});var d=await r.json();if(d.success)toast('设备已停止','success');else toast(d.error||'停止失败','error');loadDevices();}catch(e){toast(e.message,'error');}
+    try{var r=await _fetch(API+'/devices/'+id+'/stop',{method:'POST'});var d=await r.json();if(d.success)toast('设备已停止','success');else toast(d.error||'停止失败','error');loadDevices();}catch(e){toast(e.message,'error');}
 }
 async function delDevice(id){
-    try{var r=await fetch(API+'/devices/'+id,{method:'DELETE'});var d=await r.json();if(d.success)toast('设备已删除','success');else toast(d.error||'删除失败','error');loadDevices();}catch(e){toast(e.message,'error');}
+    try{var r=await _fetch(API+'/devices/'+id,{method:'DELETE'});var d=await r.json();if(d.success)toast('设备已删除','success');else toast(d.error||'删除失败','error');loadDevices();}catch(e){toast(e.message,'error');}
 }
 function showConnectionHelp(id){
     var overlay=document.createElement('div');
@@ -216,13 +216,13 @@ function renderMonitor(){
     loadMonitorDevices();
 }
 async function loadMonitorDevices(){
-    try{var r=await fetch(API+'/devices'),d=await r.json();var sel=document.getElementById('monitor-device');if(!sel)return;d.devices.forEach(function(dev){var o=document.createElement('option');o.value=dev.id;o.textContent=dev.id+' ('+dev.protocol+')';sel.appendChild(o);});}catch(e){}
+    try{var r=await _fetch(API+'/devices'),d=await r.json();var sel=document.getElementById('monitor-device');if(!sel)return;d.devices.forEach(function(dev){var o=document.createElement('option');o.value=dev.id;o.textContent=dev.id+' ('+dev.protocol+')';sel.appendChild(o);});}catch(e){}
 }
 function startMonitor(){
     if(ws)ws.close();
     var dev=document.getElementById('monitor-device').value;
-    var url='ws://'+location.host+'/api/v1/ws/monitor';
-    if(dev)url+='?device='+dev;
+var url=_wsUrl('/api/v1/ws/monitor');
+if(dev)url+=(AUTH_TOKEN?'&':'?')+'device='+dev;
     ws=new WebSocket(url);
     ws.onopen=function(){toast('监控已启动','success');document.getElementById('monitor-start-btn').classList.add('hidden');document.getElementById('monitor-stop-btn').classList.remove('hidden');monitorMsgs=[];};
     ws.onmessage=function(e){var msg=JSON.parse(e.data);monitorMsgs.push(msg);renderMonitorMsg(msg);var c=document.getElementById('monitor-count');if(c)c.textContent='共 '+monitorMsgs.length+' 条';};
@@ -261,7 +261,7 @@ async function startStress(){
     var btn=document.getElementById('stress-start-btn');
     btn.disabled=true;btn.textContent='压测中...';
     try{
-        var r=await fetch(API+'/stress/run',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:JSON.stringify(cfg)});
+        var r=await _fetch(API+'/stress/run',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:JSON.stringify(cfg)});
         var d=await r.json();
         if(d.success){
             toast(d.message||'压测已启动','success');
@@ -271,7 +271,7 @@ async function startStress(){
 }
 async function updateStressStatus(){
     try{
-        var r=await fetch(API+'/stress/status'),d=await r.json();
+        var r=await _fetch(API+'/stress/status'),d=await r.json();
         var el=document.getElementById('stress-result');if(!el)return;
         if(d.running){
             el.innerHTML='<div style="text-align:center;padding:20px"><span class="dot" style="background:#4caf50;animation:pulse 1.5s infinite;display:inline-block;margin-right:8px"></span><span style="color:#4caf50">压测运行中...</span></div>';
@@ -310,7 +310,7 @@ async function runScenario(){
     var cfg={name:document.getElementById('scenario-name').value,target:document.getElementById('scenario-target').value};
     try{
         var body=JSON.stringify(cfg);
-        var r=await fetch(API+'/scenarios/run',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:body});
+        var r=await _fetch(API+'/scenarios/run',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:body});
         var d=await r.json();
         if(d.success){
             toast('场景已启动','success');
@@ -321,14 +321,14 @@ async function runScenario(){
     }catch(e){toast(e.message,'error');}
 }
 async function stopScenario(){
-    try{var r=await fetch(API+'/scenarios/stop',{method:'POST'});var d=await r.json();if(d.success){toast('场景已停止','success');}else{toast(d.error||'停止失败','error');}}catch(e){toast(e.message,'error');}
+    try{var r=await _fetch(API+'/scenarios/stop',{method:'POST'});var d=await r.json();if(d.success){toast('场景已停止','success');}else{toast(d.error||'停止失败','error');}}catch(e){toast(e.message,'error');}
     document.getElementById('scenario-start-btn').classList.remove('hidden');
     document.getElementById('scenario-stop-btn').classList.add('hidden');
     if(scenarioTimer){clearInterval(scenarioTimer);scenarioTimer=null;}
 }
 async function updateScenarioStatus(){
     try{
-        var r=await fetch(API+'/scenarios/status'),d=await r.json();
+        var r=await _fetch(API+'/scenarios/status'),d=await r.json();
         var el=document.getElementById('scenario-status');if(!el)return;
         if(d.running){
             el.innerHTML='<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span class="dot" style="background:#4caf50;animation:pulse 1.5s infinite"></span><span style="color:#4caf50;font-weight:600">运行中</span><span style="color:#888">'+escH(d.scenario_name||'')+'</span></div>';
@@ -364,7 +364,7 @@ async function runCheck(){
     var cfg={protocol:document.getElementById('check-protocol').value,hex:hex};
     var btn=document.getElementById('check-start-btn');btn.disabled=true;btn.textContent='检查中...';
     try{
-        var r=await fetch(API+'/check/compliance',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:JSON.stringify(cfg)});
+        var r=await _fetch(API+'/check/compliance',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:JSON.stringify(cfg)});
         var d=await r.json();
         var el=document.getElementById('check-result');
         if(d.success&&d.result){
@@ -390,7 +390,7 @@ async function runCheck(){
 async function runFuzz(){
     var btn=document.getElementById('fuzz-start-btn');if(btn){btn.disabled=true;btn.textContent='Fuzz测试中...';}
     try{
-        var r=await fetch(API+'/check/fuzz',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'}});
+        var r=await _fetch(API+'/check/fuzz',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'}});
         var d=await r.json();
         var el=document.getElementById('fuzz-result');if(!el)return;
         if(d.success&&d.result){

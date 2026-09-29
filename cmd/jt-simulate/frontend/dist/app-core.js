@@ -1,5 +1,35 @@
 // JT-Simulate Frontend JS v7 - Core
 var API='/api/v1',ws=null,monitorMsgs=[],dashTimer=null,devTimer=null,stressTimer=null,scenarioTimer=null;
+
+// === Token 管理（服务模式认证）===
+var AUTH_TOKEN=null;
+(function(){
+    // 1. 先从 URL 参数 ?token=xxx 获取
+    var p=new URLSearchParams(location.search);
+    var t=p.get('token');
+    if(t){AUTH_TOKEN=t;try{localStorage.setItem('jt_simulate_token',t);}catch(e){}}
+    // 2. 再从 localStorage 获取
+    if(!AUTH_TOKEN){try{AUTH_TOKEN=localStorage.getItem('jt_simulate_token');}catch(e){}}
+    // 3. 桌面模式（127.0.0.1）不需要 token
+    if(!AUTH_TOKEN&&(location.hostname==='127.0.0.1'||location.hostname==='localhost')){
+        AUTH_TOKEN=''; // 桌面模式，空 token 表示不发送 Authorization header
+    }
+})();
+
+// fetch 包装器：自动注入 Authorization header
+function _fetch(url,opt){
+    opt=opt||{};
+    opt.headers=opt.headers||{};
+    if(AUTH_TOKEN){
+        opt.headers['Authorization']='Bearer '+AUTH_TOKEN;
+    }
+    return fetch(url,opt);
+}
+function _wsUrl(path){
+    var base=location.protocol==='https:'?'wss://':'ws://'+location.host+path;
+    if(AUTH_TOKEN){base+='?token='+encodeURIComponent(AUTH_TOKEN);}
+    return base;
+}
 function copyToClipboard(text){var ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();try{document.execCommand('copy');toast('已复制到剪贴板','success');}catch(e){toast('复制失败','error');}document.body.removeChild(ta);}
 function copyEncodeOutput(){var el=document.getElementById('encode-output');if(el)copyToClipboard(el.textContent);}
 
@@ -110,7 +140,7 @@ function renderDashboard(){
 }
 async function loadStats(){
     try{
-        var r=await fetch(API+'/stats');var d=await r.json();var el;
+        var r=await _fetch(API+'/stats');var d=await r.json();var el;
         if((el=document.getElementById('stat-total')))el.textContent=d.total_devices||0;
         if((el=document.getElementById('stat-online'))){var online=d.online_devices||0;el.textContent=online;el.style.color=online>0?'#66bb6a':'#888';}
         if((el=document.getElementById('stat-messages')))el.textContent=d.total_messages||0;
@@ -140,7 +170,7 @@ async function encodeMsg(){
     var fields={};
     document.querySelectorAll('#encode-fields input[id^="f-"]').forEach(function(el){var key=el.id.substring(2);fields[key]=el.type==='number'?(parseFloat(el.value)||0):el.value;});
     try{
-        var r=await fetch(API+'/workshop/encode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({protocol:p,version:v,msg_id:mid,phone:phone,fields:fields})});
+        var r=await _fetch(API+'/workshop/encode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({protocol:p,version:v,msg_id:mid,phone:phone,fields:fields})});
         var d=await r.json();
         if(d.success){out.textContent=d.hex;var ah=document.getElementById('analyze-hex'),ap=document.getElementById('analyze-protocol'),cb=document.getElementById('encode-copy-btn');if(ah)ah.value=d.hex;if(ap)ap.value=p;if(cb)cb.style.display='inline-flex';}
         else{out.style.color='#ef5350';out.textContent='错误: '+(d.error||'未知错误');}
@@ -150,7 +180,7 @@ async function analyzeMsg(){
     var p=document.getElementById('analyze-protocol').value,hex=document.getElementById('analyze-hex').value,result=document.getElementById('analyze-result');
     result.innerHTML='<p style="color:#888">分析中...</p>';
     try{
-        var r=await fetch(API+'/workshop/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({protocol:p,hex:hex})});
+        var r=await _fetch(API+'/workshop/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({protocol:p,hex:hex})});
         var d=await r.json();
         if(d.success){
             var iss='';
