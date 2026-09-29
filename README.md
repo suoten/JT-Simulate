@@ -412,6 +412,22 @@ A：设置环境变量 `JT_SIMULATE_TOKEN` 为你的自定义 token。服务模�
 
 ---
 
+## 关联项目
+
+| 项目 | 地址 | 说明 |
+|------|------|------|
+| **JT-Engine (JTE)** | [Gitee](https://gitee.com/suoten/jt-engine) / [GitHub](https://github.com/suoten/JTEngine) | 部标协议平台引擎，JT-Simulate 的仿真设备可直连 JTE 进行联调测试 |
+
+---
+
+## 交流群
+
+官方 QQ 群：**857924401**
+
+技术交流、问题反馈、功能建议欢迎加群。
+
+---
+
 ## License
 
 MIT License
