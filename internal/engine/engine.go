@@ -253,7 +253,10 @@ func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
 	})
 
 	logger.Info("启动设备", "device_id", deviceID, "target", info.Config.TargetAddr)
-	return sim.Online(ctx)
+	// AUTO-FIX: 使用独立的后台 context，不随 HTTP 请求结束而取消
+	// 否则心跳和位置上报 goroutine 会在 HTTP 响应返回后被 cancel
+	deviceCtx := context.Background()
+	return sim.Online(deviceCtx)
 }
 
 // StopDevice 停止设备
