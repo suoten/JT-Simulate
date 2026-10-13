@@ -502,7 +502,12 @@ func (w *Workshop) encodeJT809(msgID uint16, req *EncodeRequest) *EncodeResponse
 		bodyBytes = nil
 	}
 
-	h := &jt809.Header{MsgSN: 1, MsgID: msgID, GNSSCenterID: 1001, VersionFlag: 1}
+	// 根据版本设置 VersionFlag：0=2011, 1=2019
+	versionFlag := uint8(1) // 默认 2019
+	if req.Version == "2011" {
+		versionFlag = 0
+	}
+	h := &jt809.Header{MsgSN: 1, MsgID: msgID, MsgGNSSCENTERID: 1001, VersionFlag: versionFlag}
 	data, err := w.jt809Codec.Encode(h, bodyBytes)
 	if err != nil {
 		return &EncodeResponse{Success: false, Error: err.Error()}

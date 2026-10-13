@@ -128,12 +128,12 @@ func (c *Checker) checkRawJT809(hexStr string) (*CheckResult, error) {
 		Message: fmt.Sprintf("消息序号: %d", h.MsgSN),
 	})
 
-	// 检查 GNSSCenterID
-	centerOK := h.GNSSCenterID > 0
+	// 检查 MsgGNSSCENTERID
+	centerOK := h.MsgGNSSCENTERID > 0
 	items = append(items, CheckItem{
 		ID: "J809-002", Name: "GNSS中心ID", Category: "JT809",
 		Level: "warning", Passed: centerOK,
-		Message: fmt.Sprintf("GNSS中心ID: %d", h.GNSSCenterID),
+		Message: fmt.Sprintf("GNSS中心ID: %d", h.MsgGNSSCENTERID),
 	})
 
 	// 检查消息体长度

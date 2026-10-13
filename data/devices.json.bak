@@ -1,0 +1,23 @@
+[
+  {
+    "id": "dev001",
+    "protocol": "jt808",
+    "phone": "013800001234",
+    "plate": "?A12345",
+    "plate_color": 2,
+    "target_addr": "127.0.0.1:7611",
+    "auth_code": "test123",
+    "province_id": 11,
+    "city_id": 100,
+    "manufacturer": "TEST",
+    "terminal_model": "T-100",
+    "terminal_id": "0000001",
+    "imei": "",
+    "heartbeat_interval": 10,
+    "location_interval": 5,
+    "reconnect_interval": 15,
+    "route": "",
+    "start_lat": 39.9093,
+    "start_lon": 116.3974
+  }
+]

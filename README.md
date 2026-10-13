@@ -406,7 +406,7 @@ A：设备配置默认持久化到 `data/devices.json` 文件，重启后自动�
 
 **Q：如何启用 HTTPS？**
 A：在配置文件中设置 `server.cert_file` 和 `server.key_file` 指向你的 TLS 证书和私钥文件即可。未设置时默认使用 HTTP。
-
+2011
 **Q：生产环境如何配置 API 认证？**
 A：设置环境变量 `JT_SIMULATE_TOKEN` 为你的自定义 token。服务模式下所有 API 请求需要在 `Authorization` 头中携带 `Bearer <token>`。WebSocket 连接通过查询参数 `?token=<token>` 认证。桌面模式（127.0.0.1）自动跳过认证。
 

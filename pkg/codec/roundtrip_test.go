@@ -228,7 +228,7 @@ func TestJT809_RoundTrip_ConnectReq(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal body failed: %v", err)
 	}
-	h := &jt809.Header{MsgSN: 1, MsgID: jt809.MsgIDUpConnectReq, GNSSCenterID: 1001, VersionFlag: 1}
+	h := &jt809.Header{MsgSN: 1, MsgID: jt809.MsgIDUpConnectReq, MsgGNSSCENTERID: 1001, VersionFlag: 1}
 	data, err := codec.Encode(h, bodyBytes)
 	if err != nil {
 		t.Fatalf("encode failed: %v", err)
@@ -276,7 +276,7 @@ func TestJT809_RoundTrip_Location(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal body failed: %v", err)
 	}
-	h := &jt809.Header{MsgSN: 1, MsgID: jt809.MsgIDLocationMsg, GNSSCenterID: 1001, VersionFlag: 1}
+	h := &jt809.Header{MsgSN: 1, MsgID: jt809.MsgIDLocationMsg, MsgGNSSCENTERID: 1001, VersionFlag: 1}
 	data, err := codec.Encode(h, bodyBytes)
 	if err != nil {
 		t.Fatalf("encode failed: %v", err)
@@ -318,7 +318,7 @@ func TestJT809_RoundTrip_Alarm(t *testing.T) {
 		Direction:    180,
 	}
 	bodyBytes, _ := orig.Marshal()
-	h := &jt809.Header{MsgSN: 1, MsgID: jt809.MsgIDAlarmMsg, GNSSCenterID: 1001, VersionFlag: 1}
+	h := &jt809.Header{MsgSN: 1, MsgID: jt809.MsgIDAlarmMsg, MsgGNSSCENTERID: 1001, VersionFlag: 1}
 	data, err := codec.Encode(h, bodyBytes)
 	if err != nil {
 		t.Fatalf("encode failed: %v", err)
@@ -345,7 +345,7 @@ func TestJT809_RoundTrip_Alarm(t *testing.T) {
 
 func TestJT809_RoundTrip_LinktestReq(t *testing.T) {
 	codec := jt809.NewCodec()
-	h := &jt809.Header{MsgSN: 1, MsgID: jt809.MsgIDUpLinktestReq, GNSSCenterID: 1001, VersionFlag: 1}
+	h := &jt809.Header{MsgSN: 1, MsgID: jt809.MsgIDUpLinktestReq, MsgGNSSCENTERID: 1001, VersionFlag: 1}
 	data, err := codec.Encode(h, nil)
 	if err != nil {
 		t.Fatalf("encode failed: %v", err)
@@ -370,7 +370,7 @@ func TestJT809_RoundTrip_Statistics(t *testing.T) {
 		OnlineDuration: 3600,
 	}
 	bodyBytes, _ := orig.Marshal()
-	h := &jt809.Header{MsgSN: 1, MsgID: jt809.MsgIDStatisticsMsg, GNSSCenterID: 1001, VersionFlag: 1}
+	h := &jt809.Header{MsgSN: 1, MsgID: jt809.MsgIDStatisticsMsg, MsgGNSSCENTERID: 1001, VersionFlag: 1}
 	data, err := codec.Encode(h, bodyBytes)
 	if err != nil {
 		t.Fatalf("encode failed: %v", err)
