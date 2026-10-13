@@ -860,8 +860,8 @@ func (w *Workshop) analyzeJT808(data []byte, protocol string) *AnalyzeResponse {
 }
 
 func (w *Workshop) analyzeJT809(data []byte) *AnalyzeResponse {
-	if len(data) < 2 || data[0] != 0x5B || data[len(data)-1] != 0x5E {
-		return &AnalyzeResponse{Success: false, Error: "missing 0x5B/0x5E delimiter"}
+	if len(data) < 2 || data[0] != jt809.BeginFlag || data[len(data)-1] != jt809.EndFlag {
+		return &AnalyzeResponse{Success: false, Error: "missing 0x5B/0x5D delimiter"}
 	}
 	h, bodyData, err := w.jt809Codec.Decode(data)
 	if err != nil {
