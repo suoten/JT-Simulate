@@ -68,6 +68,15 @@ var AllMessages1253 = []MsgInfo1253{
 	{0x8D0C, "液位阈值设置", "down"},
 }
 
+// padTimeLeft 将时间字符串前导补零至 n 字节。
+// 返回新的字符串，不修改调用方数据。
+func padTimeLeft(s string, n int) string {
+	for len(s) < n {
+		s = "0" + s
+	}
+	return s
+}
+
 // HazardStatusMessage 危险品状态
 type HazardStatusMessage struct {
 	VehicleColor byte
@@ -95,11 +104,9 @@ func (m *HazardStatusMessage) Marshal() ([]byte, error) {
 		plate = append(plate, 0)
 	}
 	buf = append(buf, plate[:21]...)
-	for len(m.StatusTime) < 12 {
-		m.StatusTime = "0" + m.StatusTime
-	}
+	statusTime := padTimeLeft(m.StatusTime, 12)
 	for i := 0; i < 6; i++ {
-		buf = append(buf, ((m.StatusTime[i*2]-'0')<<4)|(m.StatusTime[i*2+1]-'0'))
+		buf = append(buf, ((statusTime[i*2]-'0')<<4)|(statusTime[i*2+1]-'0'))
 	}
 	buf = append(buf, m.HazardClass)
 	buf = append(buf, m.HazardState)
@@ -183,11 +190,9 @@ func (m *UnloadReportMessage) Marshal() ([]byte, error) {
 		plate = append(plate, 0)
 	}
 	buf = append(buf, plate[:21]...)
-	for len(m.UnloadTime) < 12 {
-		m.UnloadTime = "0" + m.UnloadTime
-	}
+	unloadTime := padTimeLeft(m.UnloadTime, 12)
 	for i := 0; i < 6; i++ {
-		buf = append(buf, ((m.UnloadTime[i*2]-'0')<<4)|(m.UnloadTime[i*2+1]-'0'))
+		buf = append(buf, ((unloadTime[i*2]-'0')<<4)|(unloadTime[i*2+1]-'0'))
 	}
 	buf = append(buf, m.HazardClass)
 	amtBytes := make([]byte, 4)

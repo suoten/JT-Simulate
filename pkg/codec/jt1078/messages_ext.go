@@ -131,6 +131,15 @@ func MessagesByVersion1078(ver Version1078) []MsgInfo1078 {
 	}
 }
 
+// padTimeLeft 将时间字符串前导补零至 n 字节。
+// 返回新的字符串，不修改调用方数据。
+func padTimeLeft(s string, n int) string {
+	for len(s) < n {
+		s = "0" + s
+	}
+	return s
+}
+
 // PlaybackCtrlMessage 0x9203 回放控制
 type PlaybackCtrlMessage struct {
 	LogicalCh  byte
@@ -146,11 +155,9 @@ func (m *PlaybackCtrlMessage) Marshal() ([]byte, error) {
 	buf = append(buf, m.LogicalCh)
 	buf = append(buf, m.CtrlCmd)
 	buf = append(buf, m.PlaySpeed)
-	for len(m.PlayTime) < 14 {
-		m.PlayTime = "0" + m.PlayTime
-	}
+	playTime := padTimeLeft(m.PlayTime, 14)
 	for i := 0; i < 7; i++ {
-		buf = append(buf, ((m.PlayTime[i*2]-'0')<<4)|(m.PlayTime[i*2+1]-'0'))
+		buf = append(buf, ((playTime[i*2]-'0')<<4)|(playTime[i*2+1]-'0'))
 	}
 	return buf, nil
 }
@@ -190,9 +197,7 @@ func (m *PlaybackRespMessage) Marshal() ([]byte, error) {
 	buf = append(buf, m.LogicalCh)
 	buf = append(buf, m.Result)
 	for _, t := range []string{m.StartTime, m.EndTime} {
-		for len(t) < 14 {
-			t = "0" + t
-		}
+		t = padTimeLeft(t, 14)
 		for i := 0; i < 7; i++ {
 			buf = append(buf, ((t[i*2]-'0')<<4)|(t[i*2+1]-'0'))
 		}

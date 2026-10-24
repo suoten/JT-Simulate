@@ -259,6 +259,12 @@ func (c *JT808Codec) Encode(header *types.MessageHeader, body types.MessageBody)
 		return nil, fmt.Errorf("encode body: %w", err)
 	}
 
+	// 校验消息体长度：消息体属性中的长度字段只有10位（最大1023），
+	// 超长且未启用分包时静默截断会产出损坏帧，必须显式报错
+	if len(bodyBytes) > MaxBodyLen && !header.HasPack {
+		return nil, fmt.Errorf("encode: body length %d exceeds max %d (body attr is 10-bit) and fragmentation is not enabled", len(bodyBytes), MaxBodyLen)
+	}
+
 	// 更新消息体属性中的长度
 	bodyAttr := uint16(len(bodyBytes)) & 0x03FF
 	bodyAttr |= (uint16(header.EncryptMethod) & 0x07) << 10
@@ -311,8 +317,15 @@ func (c *JT808Codec) Decode(frame []byte) (*types.Message, error) {
 		return nil, fmt.Errorf("parse header: %w", err)
 	}
 
-	// 解析消息体
+	// 解析消息体：以消息头声明的 BodyLen 为准
 	bodyData := data[headerLen:]
+	if header.BodyLen > len(bodyData) {
+		return nil, fmt.Errorf("parse body: header body length %d exceeds remaining %d bytes", header.BodyLen, len(bodyData))
+	}
+	if header.BodyLen < len(bodyData) {
+		// 容忍尾部填充/粘连残留，只取声明的字节数
+		bodyData = bodyData[:header.BodyLen]
+	}
 	body, err := c.ParseBody(header.MsgID, bodyData)
 	if err != nil {
 		return nil, fmt.Errorf("parse body: %w", err)

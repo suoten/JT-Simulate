@@ -20,11 +20,14 @@ func TestEncodeVersionDifference(t *testing.T) {
 	}
 
 	// 2019 版：VersionFlag=1，头长 30 字节
+	// 固定 UTCTime（8 字节内不含 0x5A/0x5B/0x5D/0x5E），
+	// 避免时间戳中的特殊字节被转义后帧长度随时间波动
 	h2019 := &Header{
 		MsgSN:           1,
 		MsgID:           MsgIDUpLinktestReq,
 		MsgGNSSCENTERID: 1001,
 		VersionFlag:     1, // 2019
+		UTCTime:         1700000001000,
 	}
 	data2019, err := NewCodec().Encode(h2019, nil)
 	if err != nil {
@@ -127,12 +130,14 @@ func TestEncodeWithBody(t *testing.T) {
 	}
 	data2011, _ := NewCodec().Encode(h2011, bodyBytes)
 
-	// 2019 版
+	// 2019 版（固定 UTCTime，其 8 字节不含 0x5A/0x5B/0x5D/0x5E，
+	// 确保转义不改变帧长度，长度断言稳定）
 	h2019 := &Header{
 		MsgSN:           1,
 		MsgID:           MsgIDLocationMsg,
 		MsgGNSSCENTERID: 1001,
 		VersionFlag:     1,
+		UTCTime:         1700000001000,
 	}
 	data2019, _ := NewCodec().Encode(h2019, bodyBytes)
 

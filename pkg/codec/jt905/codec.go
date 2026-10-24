@@ -72,7 +72,10 @@ func (m *TaxiOperateMessage) Marshal() ([]byte, error) {
 }
 
 func (m *TaxiOperateMessage) Unmarshal(data []byte) error {
-	if len(data) < 50 {
+	// color(1) + plate(21) + type(1) + onTimeBCD(6) + offTimeBCD(6)
+	// + onLat(4) + onLon(4) + offLat(4) + offLon(4) = 51 字节
+	// distance(4) + amount(4) 为可选尾部字段
+	if len(data) < 51 {
 		return fmt.Errorf("905 operate data too short")
 	}
 	m.VehicleColor = data[0]

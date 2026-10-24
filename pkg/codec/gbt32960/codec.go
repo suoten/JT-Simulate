@@ -22,9 +22,16 @@ const (
 	RespError   byte = 0x02
 )
 
+const (
+	// StartChar GB/T 32960.3-2016 起始符 "##"（2 字节 0x23 0x23）
+	StartChar byte = 0x23
+	// HeaderLen 报文头长度：起始符2 + 命令标识1 + 应答标志1 + VIN17 + 加密方式1 + 数据长度2
+	HeaderLen int = 24
+)
+
 // Header 32960 报文头
 type Header struct {
-	StartChar  byte   // 起始符 0x23
+	StartChar  byte   // 起始符（0x23，实际报文中为两字节 0x23 0x23）
 	CmdFlag    byte   // 命令标识
 	RespFlag   byte   // 应答标志
 	VIN        string // 车辆识别码 (17字节)
@@ -39,12 +46,13 @@ type Packet struct {
 	BCC    byte // 校验码
 }
 
-// Encode 编码报文
+// Encode 编码报文（GB/T 32960.3-2016：起始符 0x23 0x23 两字节；
+// BCC 为"命令标识"到"数据单元"末尾全部字节的异或，不含起始符和 BCC 自身）
 func Encode(h *Header, body []byte) []byte {
 	h.BodyLen = uint16(len(body))
 
-	buf := make([]byte, 0, 24+len(body)+1)
-	buf = append(buf, h.StartChar)
+	buf := make([]byte, 0, HeaderLen+len(body)+1)
+	buf = append(buf, StartChar, StartChar)
 	buf = append(buf, h.CmdFlag)
 	buf = append(buf, h.RespFlag)
 	vin := []byte(h.VIN)
@@ -60,9 +68,9 @@ func Encode(h *Header, body []byte) []byte {
 
 	buf = append(buf, body...)
 
-	// BCC校验
+	// BCC校验：从命令标识到数据单元末尾（不含起始符与 BCC）
 	var bcc byte
-	for _, b := range buf {
+	for _, b := range buf[2:] {
 		bcc ^= b
 	}
 	buf = append(buf, bcc)
@@ -72,32 +80,33 @@ func Encode(h *Header, body []byte) []byte {
 
 // Decode 解码报文
 func Decode(data []byte) (*Packet, error) {
-	if len(data) < 24 {
+	if len(data) < HeaderLen {
 		return nil, fmt.Errorf("32960 packet too short: %d", len(data))
 	}
-	if data[0] != 0x23 {
-		return nil, fmt.Errorf("invalid start char: 0x%02X", data[0])
+	if data[0] != StartChar || data[1] != StartChar {
+		return nil, fmt.Errorf("invalid start chars: 0x%02X 0x%02X (expected 23 23)", data[0], data[1])
 	}
 
 	pkt := &Packet{}
 	pkt.Header.StartChar = data[0]
-	pkt.Header.CmdFlag = data[1]
-	pkt.Header.RespFlag = data[2]
-	pkt.Header.VIN = string(data[3:20])
-	pkt.Header.EncryptType = data[20]
-	pkt.Header.BodyLen = binary.BigEndian.Uint16(data[21:23])
+	pkt.Header.CmdFlag = data[2]
+	pkt.Header.RespFlag = data[3]
+	pkt.Header.VIN = string(data[4:21])
+	pkt.Header.EncryptType = data[21]
+	pkt.Header.BodyLen = binary.BigEndian.Uint16(data[22:24])
 
-	if len(data) < int(23+pkt.Header.BodyLen)+1 {
+	bodyEnd := HeaderLen + int(pkt.Header.BodyLen)
+	if len(data) < bodyEnd+1 {
 		return nil, fmt.Errorf("32960 packet body too short")
 	}
 
 	pkt.Body = make([]byte, pkt.Header.BodyLen)
-	copy(pkt.Body, data[23:23+pkt.Header.BodyLen])
-	pkt.BCC = data[23+pkt.Header.BodyLen]
+	copy(pkt.Body, data[HeaderLen:bodyEnd])
+	pkt.BCC = data[bodyEnd]
 
-	// BCC校验
+	// BCC校验：从命令标识到数据单元末尾（不含起始符与 BCC）
 	var bcc byte
-	for _, b := range data[:23+pkt.Header.BodyLen] {
+	for _, b := range data[2:bodyEnd] {
 		bcc ^= b
 	}
 	if bcc != pkt.BCC {

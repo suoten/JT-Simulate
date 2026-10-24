@@ -554,7 +554,7 @@ func TestGBT32960_RoundTrip_RealtimeInfo(t *testing.T) {
 		DCDCStatus: 0x01, Shift: 0x02, Resistance: 500,
 	}
 	posData := &gbt32960.PositionData{
-		ChargeStatus: 0x01, Lat: 22543210, Lon: 113945678,
+		LocStatus: 0x00, Lat: 22543210, Lon: 113945678,
 		Altitude: 500, Direction: 180, Speed: 600,
 	}
 	items := []gbt32960.RealtimeDataItem{

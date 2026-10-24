@@ -83,26 +83,26 @@ func EncodeVehicleData(d *VehicleData) []byte {
 	return buf
 }
 
-// PositionData 位置数据
+// PositionData 位置数据（GB/T 32960.3-2016：定位状态 + 经度 + 纬度 + 海拔 + 方向 + 速度，共 15 字节）
 type PositionData struct {
-	ChargeStatus byte   // 充电状态
-	Lat          int32  // 纬度(度*10^6)
-	Lon          int32  // 经度(度*10^6)
-	Altitude     uint16 // 海拔(0.1m)
-	Direction    uint16 // 方向(0-359)
-	Speed        uint16 // 速度(0.1km/h)
+	LocStatus byte   // 定位状态：bit0=0 有效定位/1 无效定位；bit1=0 北纬/1 南纬；bit2=0 东经/1 西经
+	Lon       int32  // 经度(度*10^6，西经取负)
+	Lat       int32  // 纬度(度*10^6，南纬取负)
+	Altitude  uint16 // 海拔(0.1m)
+	Direction uint16 // 方向(0-359)
+	Speed     uint16 // 速度(0.1km/h)
 }
 
-// EncodePositionData 编码位置数据
+// EncodePositionData 编码位置数据（国标顺序：经度在前、纬度在后）
 func EncodePositionData(d *PositionData) []byte {
-	buf := make([]byte, 0, 14)
-	buf = append(buf, d.ChargeStatus)
-	latBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(latBytes, uint32(d.Lat))
-	buf = append(buf, latBytes...)
+	buf := make([]byte, 0, 15)
+	buf = append(buf, d.LocStatus)
 	lonBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(lonBytes, uint32(d.Lon))
 	buf = append(buf, lonBytes...)
+	latBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(latBytes, uint32(d.Lat))
+	buf = append(buf, latBytes...)
 	altBytes := make([]byte, 2)
 	binary.BigEndian.PutUint16(altBytes, d.Altitude)
 	buf = append(buf, altBytes...)

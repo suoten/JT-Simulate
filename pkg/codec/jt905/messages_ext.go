@@ -71,6 +71,15 @@ var AllMessages905 = []MsgInfo905{
 	{0x8B0F, "支付应答", "down"},
 }
 
+// padTimeLeft 将时间字符串前导补零至 n 字节。
+// 返回新的字符串，不修改调用方数据。
+func padTimeLeft(s string, n int) string {
+	for len(s) < n {
+		s = "0" + s
+	}
+	return s
+}
+
 // TaxiStatusMessage 0x0B00 计价器状态
 type TaxiStatusMessage struct {
 	VehicleColor byte
@@ -92,11 +101,9 @@ func (m *TaxiStatusMessage) Marshal() ([]byte, error) {
 	}
 	buf = append(buf, plate[:21]...)
 	buf = append(buf, m.Status)
-	for len(m.ChangeTime) < 12 {
-		m.ChangeTime = "0" + m.ChangeTime
-	}
+	changeTime := padTimeLeft(m.ChangeTime, 12)
 	for i := 0; i < 6; i++ {
-		buf = append(buf, ((m.ChangeTime[i*2]-'0')<<4)|(m.ChangeTime[i*2+1]-'0'))
+		buf = append(buf, ((changeTime[i*2]-'0')<<4)|(changeTime[i*2+1]-'0'))
 	}
 	latBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(latBytes, uint32(math.Abs(m.Lat)*1000000))
@@ -188,11 +195,9 @@ func (m *TaxiPriceMessage) MsgID() uint16 { return MsgIDTaxiPrice }
 
 func (m *TaxiPriceMessage) Marshal() ([]byte, error) {
 	buf := make([]byte, 0, 20)
-	for len(m.StartTime) < 12 {
-		m.StartTime = "0" + m.StartTime
-	}
+	startTime := padTimeLeft(m.StartTime, 12)
 	for i := 0; i < 6; i++ {
-		buf = append(buf, ((m.StartTime[i*2]-'0')<<4)|(m.StartTime[i*2+1]-'0'))
+		buf = append(buf, ((startTime[i*2]-'0')<<4)|(startTime[i*2+1]-'0'))
 	}
 	priceBytes := make([]byte, 2)
 	binary.BigEndian.PutUint16(priceBytes, m.UnitPrice)

@@ -74,6 +74,15 @@ var AllMessages1045 = []MsgInfo1045{
 	{0x1210, "胎压状态上报", "up"},
 }
 
+// padTimeLeft 将时间字符串前导补零至 n 字节。
+// 返回新的字符串，不修改调用方数据。
+func padTimeLeft(s string, n int) string {
+	for len(s) < n {
+		s = "0" + s
+	}
+	return s
+}
+
 // ADASDataMessage ADAS数据
 type ADASDataMessage struct {
 	VehicleColor byte
@@ -101,11 +110,9 @@ func (m *ADASDataMessage) Marshal() ([]byte, error) {
 		plate = append(plate, 0)
 	}
 	buf = append(buf, plate[:21]...)
-	for len(m.AlarmTime) < 12 {
-		m.AlarmTime = "0" + m.AlarmTime
-	}
+	alarmTime := padTimeLeft(m.AlarmTime, 12)
 	for i := 0; i < 6; i++ {
-		buf = append(buf, ((m.AlarmTime[i*2]-'0')<<4)|(m.AlarmTime[i*2+1]-'0'))
+		buf = append(buf, ((alarmTime[i*2]-'0')<<4)|(alarmTime[i*2+1]-'0'))
 	}
 	typeBytes := make([]byte, 2)
 	binary.BigEndian.PutUint16(typeBytes, m.AlarmType)
@@ -202,11 +209,9 @@ func (m *TireAlarmMessage) Marshal() ([]byte, error) {
 		plate = append(plate, 0)
 	}
 	buf = append(buf, plate[:21]...)
-	for len(m.AlarmTime) < 12 {
-		m.AlarmTime = "0" + m.AlarmTime
-	}
+	alarmTime := padTimeLeft(m.AlarmTime, 12)
 	for i := 0; i < 6; i++ {
-		buf = append(buf, ((m.AlarmTime[i*2]-'0')<<4)|(m.AlarmTime[i*2+1]-'0'))
+		buf = append(buf, ((alarmTime[i*2]-'0')<<4)|(alarmTime[i*2+1]-'0'))
 	}
 	buf = append(buf, m.TirePosition)
 	pBytes := make([]byte, 2)

@@ -62,6 +62,23 @@ func headerLenByVersion(versionFlag uint8) int {
 	return HeaderLen2019 // 2019 版，30 字节
 }
 
+// plausibleUTCTimestamp 判断 8 字节大端整数是否为合理的 Unix 时间戳。
+// 本实现 Encode 写入的是毫秒级时间戳（UnixMilli），标准对端可能使用秒级，
+// 因此两种量级均接受；范围放宽到 2015-01-01 ~ 2100-01-01。
+func plausibleUTCTimestamp(b []byte) bool {
+	if len(b) < 8 {
+		return false
+	}
+	v := binary.BigEndian.Uint64(b)
+	const (
+		minSeconds uint64 = 1420070400    // 2015-01-01
+		maxSeconds uint64 = 4102444800    // 2100-01-01
+		minMillis  uint64 = 1420070400000 // 2015-01-01 (ms)
+		maxMillis  uint64 = 4102444800000 // 2100-01-01 (ms)
+	)
+	return (v >= minSeconds && v <= maxSeconds) || (v >= minMillis && v <= maxMillis)
+}
+
 // ParseHeader 解析消息头（自动检测 2011/2019 版本）
 func (c *JT809Codec) ParseHeader(data []byte) (*Header, int, error) {
 	if len(data) < HeaderLen2011 {
@@ -79,20 +96,19 @@ func (c *JT809Codec) ParseHeader(data []byte) (*Header, int, error) {
 
 	// 版本检测策略：
 	// 1. 优先通过 Version 字段第一个字节判断：0x01 = 2019 版
-	// 2. 如果 Version[0] != 0x01，则检查 MsgLength 是否与 2019 版头长匹配
+	// 2. 如果 Version[0] != 0x01，按长度无法区分 2011/2019：
+	//    两种头长假设都与 MsgLength 自洽（2011 版只是把 2019 版头部的
+	//    8 字节 UTC 时间戳当作消息体前缀），因此借助 2019 版头部特有的
+	//    UTC 时间戳字段做兜底：MsgLength 与数据长度吻合且 data[22:30]
+	//    是合理的 Unix 时间戳（秒/毫秒）时判定为 2019 版。
 	// 3. 否则回退到 2011 版
 	is2019 := false
 	if len(h.Version) >= 1 && h.Version[0] == 0x01 {
 		is2019 = true
 	} else if len(data) >= HeaderLen2019 {
 		bodyLen2019 := int(h.MsgLength) - HeaderLen2019 - checksumLen - 1 // -1 for endflag
-		if bodyLen2019 >= 0 && HeaderLen2019+bodyLen2019+checksumLen == len(data) {
-			// MsgLength 与 2019 版头匹配，但 Version[0] != 0x01
-			// 仅当 2011 版不匹配时才使用 2019 版
-			bodyLen2011 := int(h.MsgLength) - HeaderLen2011 - checksumLen - 1
-			if bodyLen2011 < 0 || HeaderLen2011+bodyLen2011+checksumLen != len(data) {
-				is2019 = true
-			}
+		if bodyLen2019 >= 0 && HeaderLen2019+bodyLen2019 == len(data) && plausibleUTCTimestamp(data[22:30]) {
+			is2019 = true
 		}
 	}
 
@@ -130,15 +146,14 @@ func (c *JT809Codec) EncodeHeader(h *Header) ([]byte, error) {
 	binary.BigEndian.PutUint16(buf[8:10], h.MsgID)
 	binary.BigEndian.PutUint32(buf[10:14], h.MsgGNSSCENTERID)
 
-	// 版本号标识（3 字节）
-	ver := h.Version
-	if len(ver) < 3 {
-		ver = make([]byte, 3)
-		if h.VersionFlag == 1 {
-			ver[0] = 0x01 // 2019 版版本号
-		}
+	// 版本号标识（3 字节）：保留调用方已提供的字节，后位补零；
+	// 仅在未提供任何版本字节且为 2019 版时使用默认版本号 0x01
+	ver := make([]byte, 3)
+	copy(ver, h.Version)
+	if len(h.Version) == 0 && h.VersionFlag == 1 {
+		ver[0] = 0x01 // 2019 版版本号
 	}
-	copy(buf[14:17], ver[:3])
+	copy(buf[14:17], ver)
 
 	buf[17] = h.MsgEncrypt
 	binary.BigEndian.PutUint32(buf[18:22], h.EncryptKey)
@@ -194,15 +209,21 @@ func (c *JT809Codec) Encode(h *Header, body []byte) ([]byte, error) {
 	crc := calcCRC16(raw)
 	raw = append(raw, byte(crc>>8), byte(crc&0xFF))
 
-	// 转义：0x5B → 0x5B 0x5E, 0x5D → 0x5B 0x5C
-	// 注意：帧首 0x5B 和帧尾 0x5D 是标记，不在转义范围内
+	// 转义（JT/T 809 标准，与 SmallChi/JT809 一致）：
+	// 0x5B → 0x5A 0x01；0x5A → 0x5A 0x02；0x5D → 0x5E 0x01；0x5E → 0x5E 0x02
+	// 注意：帧首 0x5B 和帧尾 0x5D 是标记，不在转义范围内；
+	// CRC 已在上面对未转义数据计算完成
 	escaped := make([]byte, 0, len(raw)*2)
 	for _, b := range raw {
 		switch b {
 		case 0x5B:
-			escaped = append(escaped, 0x5B, 0x5E)
+			escaped = append(escaped, 0x5A, 0x01)
+		case 0x5A:
+			escaped = append(escaped, 0x5A, 0x02)
 		case 0x5D:
-			escaped = append(escaped, 0x5B, 0x5C)
+			escaped = append(escaped, 0x5E, 0x01)
+		case 0x5E:
+			escaped = append(escaped, 0x5E, 0x02)
 		default:
 			escaped = append(escaped, b)
 		}
@@ -229,16 +250,21 @@ func (c *JT809Codec) Decode(frame []byte) (*Header, []byte, error) {
 	// 去除首尾标记
 	striped := frame[1 : len(frame)-1]
 
-	// 反转义：0x5B 0x5E → 0x5B, 0x5B 0x5C → 0x5D
+	// 反转义（JT/T 809 标准，与 SmallChi/JT809 一致）：
+	// 0x5A 0x01 → 0x5B；0x5A 0x02 → 0x5A；0x5E 0x01 → 0x5D；0x5E 0x02 → 0x5E
 	raw := make([]byte, 0, len(striped))
 	i := 0
 	for i < len(striped) {
-		if striped[i] == 0x5B && i+1 < len(striped) {
-			switch striped[i+1] {
-			case 0x5E:
+		if (striped[i] == 0x5A || striped[i] == 0x5E) && i+1 < len(striped) {
+			switch {
+			case striped[i] == 0x5A && striped[i+1] == 0x01:
 				raw = append(raw, 0x5B)
-			case 0x5C:
+			case striped[i] == 0x5A && striped[i+1] == 0x02:
+				raw = append(raw, 0x5A)
+			case striped[i] == 0x5E && striped[i+1] == 0x01:
 				raw = append(raw, 0x5D)
+			case striped[i] == 0x5E && striped[i+1] == 0x02:
+				raw = append(raw, 0x5E)
 			default:
 				// 不是合法的转义序列，保留原始字节
 				raw = append(raw, striped[i], striped[i+1])

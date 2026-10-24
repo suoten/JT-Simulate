@@ -139,6 +139,15 @@ const (
 // 坐标缩放因子
 const CoordScaleFactor = 1000000.0
 
+// 0x0200 状态标志中的坐标符号位（自 JT/T 808-2011 起定义）
+const (
+	StatusFlagSouthLatitude uint32 = 0x04 // bit2: 1=南纬, 0=北纬
+	StatusFlagWestLongitude uint32 = 0x08 // bit3: 1=西经, 0=东经
+)
+
+// 消息体属性长度字段（10位）可表示的最大消息体长度
+const MaxBodyLen = 0x03FF // 1023
+
 // 单帧最大长度
 const MaxFrameSize = 1 * 1024 * 1024
 
@@ -164,7 +173,7 @@ const (
 type VersionFeature struct {
 	HasProtocolVer   bool // 消息头中是否有协议版本号字节(2019有)
 	HasChromaParam   bool // 摄像头拍摄是否有色度参数(2019有)
-	BatchItemLenSize int  // 批量位置项长度字节数(2019=2, 2011/2013=2)
+	BatchItemLenSize int  // 批量位置项长度字节数(2019=2, 2011/2013=1)
 	AuthHasIMEI      bool // 鉴权消息是否有IMEI(2019有)
 }
 
@@ -175,14 +184,14 @@ func GetVersionFeature(ver Version808) VersionFeature {
 		return VersionFeature{
 			HasProtocolVer:   false,
 			HasChromaParam:   false,
-			BatchItemLenSize: 2,
+			BatchItemLenSize: 1,
 			AuthHasIMEI:      false,
 		}
 	case Version808_2013:
 		return VersionFeature{
 			HasProtocolVer:   false,
 			HasChromaParam:   false,
-			BatchItemLenSize: 2,
+			BatchItemLenSize: 1,
 			AuthHasIMEI:      false,
 		}
 	default: // 2019

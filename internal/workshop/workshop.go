@@ -603,7 +603,7 @@ func (w *Workshop) encodeGBT32960(msgID uint16, req *EncodeRequest) *EncodeRespo
 			DCDCStatus: 0x01, Shift: 0x02, Resistance: 500,
 		}
 		posData := &gbt32960.PositionData{
-			ChargeStatus: 0x01, Lat: int32(lat * 1000000), Lon: int32(lon * 1000000),
+			LocStatus: 0x00, Lat: int32(lat * 1000000), Lon: int32(lon * 1000000),
 			Altitude: 500, Direction: uint16(getInt(req.Fields, "direction")), Speed: sp,
 		}
 		items := []gbt32960.RealtimeDataItem{

@@ -672,17 +672,23 @@ func (m *PolygonAreaSetMessage) Marshal() ([]byte, error) {
 
 	for _, pt := range m.Points {
 		latBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(latBytes, uint32(pt.Lat*CoordScaleFactor))
+		binary.BigEndian.PutUint32(latBytes, encodeAreaCoord(pt.Lat))
 		buf = append(buf, latBytes...)
 		lonBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(lonBytes, uint32(pt.Lon*CoordScaleFactor))
+		binary.BigEndian.PutUint32(lonBytes, encodeAreaCoord(pt.Lon))
 		buf = append(buf, lonBytes...)
 	}
 
 	if m.Attr&0x02 != 0 {
-		startBCD, _ := StringToBCD(m.StartTime, 3)
+		startBCD, err := StringToBCD(m.StartTime, 3)
+		if err != nil {
+			return nil, fmt.Errorf("encode polygon area start time: %w", err)
+		}
 		buf = append(buf, startBCD...)
-		endBCD, _ := StringToBCD(m.EndTime, 3)
+		endBCD, err := StringToBCD(m.EndTime, 3)
+		if err != nil {
+			return nil, fmt.Errorf("encode polygon area end time: %w", err)
+		}
 		buf = append(buf, endBCD...)
 		slBytes := make([]byte, 2)
 		binary.BigEndian.PutUint16(slBytes, m.SpeedLimit)
@@ -751,9 +757,15 @@ func (m *RouteSetMessage) Marshal() ([]byte, error) {
 	buf = append(buf, attrBytes...)
 
 	if m.Attr&0x02 != 0 {
-		startBCD, _ := StringToBCD(m.StartTime, 3)
+		startBCD, err := StringToBCD(m.StartTime, 3)
+		if err != nil {
+			return nil, fmt.Errorf("encode route set start time: %w", err)
+		}
 		buf = append(buf, startBCD...)
-		endBCD, _ := StringToBCD(m.EndTime, 3)
+		endBCD, err := StringToBCD(m.EndTime, 3)
+		if err != nil {
+			return nil, fmt.Errorf("encode route set end time: %w", err)
+		}
 		buf = append(buf, endBCD...)
 	}
 
@@ -767,11 +779,11 @@ func (m *RouteSetMessage) Marshal() ([]byte, error) {
 		buf = append(buf, pid...)
 
 		latBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(latBytes, uint32(pt.Lat*CoordScaleFactor))
+		binary.BigEndian.PutUint32(latBytes, encodeAreaCoord(pt.Lat))
 		buf = append(buf, latBytes...)
 
 		lonBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(lonBytes, uint32(pt.Lon*CoordScaleFactor))
+		binary.BigEndian.PutUint32(lonBytes, encodeAreaCoord(pt.Lon))
 		buf = append(buf, lonBytes...)
 
 		buf = append(buf, pt.Width)

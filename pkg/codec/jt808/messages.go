@@ -252,31 +252,41 @@ type LocationMessage struct {
 func (m *LocationMessage) MsgID() uint16 { return MsgIDLocation }
 
 func (m *LocationMessage) Marshal() ([]byte, error) {
+	// 校验坐标：NaN 或超出协议范围（纬度±90、经度±180）时无法用
+	// uint32*1e6 表示，直接报错而不是产出损坏报文
+	if math.IsNaN(m.Latitude) || m.Latitude < -90 || m.Latitude > 90 {
+		return nil, fmt.Errorf("encode location: invalid latitude %f (out of [-90,90] or NaN)", m.Latitude)
+	}
+	if math.IsNaN(m.Longitude) || m.Longitude < -180 || m.Longitude > 180 {
+		return nil, fmt.Errorf("encode location: invalid longitude %f (out of [-180,180] or NaN)", m.Longitude)
+	}
+
 	buf := make([]byte, 0, 28)
 	alarm := make([]byte, 4)
 	binary.BigEndian.PutUint32(alarm, m.AlarmFlag)
 	buf = append(buf, alarm...)
 
-	status := make([]byte, 4)
-	binary.BigEndian.PutUint32(status, m.StatusFlag)
-	buf = append(buf, status...)
-
-	// 纬度：取绝对值后乘以缩放因子，协议中为uint32
-	lat := uint32(math.Abs(m.Latitude) * CoordScaleFactor)
-	if lat > 0xFFFFFFFF {
-		lat = 0xFFFFFFFF
+	// 纬度/经度符号写入状态位（bit2=南纬，bit3=西经，2011起即有定义），
+	// 与 Unmarshal 的恢复逻辑对称，保证负坐标 round-trip 不丢符号
+	status := m.StatusFlag &^ (StatusFlagSouthLatitude | StatusFlagWestLongitude)
+	if m.Latitude < 0 {
+		status |= StatusFlagSouthLatitude
 	}
+	if m.Longitude < 0 {
+		status |= StatusFlagWestLongitude
+	}
+	statusBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(statusBytes, status)
+	buf = append(buf, statusBytes...)
+
+	// 纬度：取绝对值后乘以缩放因子，协议中为uint32（范围校验已保证不溢出）
 	latBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(latBytes, lat)
+	binary.BigEndian.PutUint32(latBytes, uint32(math.Abs(m.Latitude)*CoordScaleFactor))
 	buf = append(buf, latBytes...)
 
 	// 经度：取绝对值后乘以缩放因子，协议中为uint32
-	lon := uint32(math.Abs(m.Longitude) * CoordScaleFactor)
-	if lon > 0xFFFFFFFF {
-		lon = 0xFFFFFFFF
-	}
 	lonBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(lonBytes, lon)
+	binary.BigEndian.PutUint32(lonBytes, uint32(math.Abs(m.Longitude)*CoordScaleFactor))
 	buf = append(buf, lonBytes...)
 
 	alt := make([]byte, 2)
@@ -314,14 +324,14 @@ func (m *LocationMessage) Unmarshal(data []byte) error {
 	rawLat := binary.BigEndian.Uint32(data[8:12])
 	m.Latitude = float64(rawLat) / CoordScaleFactor
 	// Bit 2 of StatusFlag: 0=北纬, 1=南纬
-	if m.StatusFlag&0x04 != 0 {
+	if m.StatusFlag&StatusFlagSouthLatitude != 0 {
 		m.Latitude = -m.Latitude
 	}
 
 	rawLon := binary.BigEndian.Uint32(data[12:16])
 	m.Longitude = float64(rawLon) / CoordScaleFactor
 	// Bit 3 of StatusFlag: 0=东经, 1=西经
-	if m.StatusFlag&0x08 != 0 {
+	if m.StatusFlag&StatusFlagWestLongitude != 0 {
 		m.Longitude = -m.Longitude
 	}
 
@@ -343,6 +353,10 @@ func (m *LocationMessage) Unmarshal(data []byte) error {
 type LocationBatchMessage struct {
 	Type    byte
 	Items   []*LocationMessage
+	// Version 编解码所依据的协议版本：2011/2013 每数据项长度字段为1字节，
+	// 2019 为2字节。消息体无法感知消息头版本，需由调用方指定；
+	// 零值按 2019（2字节）处理以保持默认行为
+	Version Version808
 }
 
 func (m *LocationBatchMessage) MsgID() uint16 { return MsgIDLocationBatch }
@@ -354,15 +368,23 @@ func (m *LocationBatchMessage) Marshal() ([]byte, error) {
 	binary.BigEndian.PutUint16(count, uint16(len(m.Items)))
 	buf = append(buf, count...)
 
-	for _, loc := range m.Items {
+	itemLenSize := GetVersionFeature(m.Version).BatchItemLenSize
+	for i, loc := range m.Items {
 		locData, err := loc.Marshal()
 		if err != nil {
 			return nil, err
 		}
-		// JT/T 808-2019: 位置项长度为2字节
-		lenBytes := make([]byte, 2)
-		binary.BigEndian.PutUint16(lenBytes, uint16(len(locData)))
-		buf = append(buf, lenBytes...)
+		// JT/T 808-2011/2013: 位置项长度为1字节；JT/T 808-2019: 2字节
+		if itemLenSize == 1 {
+			if len(locData) > 0xFF {
+				return nil, fmt.Errorf("batch location: item %d length %d exceeds 1-byte length field (2011/2013)", i, len(locData))
+			}
+			buf = append(buf, byte(len(locData)))
+		} else {
+			lenBytes := make([]byte, 2)
+			binary.BigEndian.PutUint16(lenBytes, uint16(len(locData)))
+			buf = append(buf, lenBytes...)
+		}
 		buf = append(buf, locData...)
 	}
 
@@ -376,13 +398,23 @@ func (m *LocationBatchMessage) Unmarshal(data []byte) error {
 	m.Type = data[0]
 	count := binary.BigEndian.Uint16(data[1:3])
 	offset := 3
+	itemLenSize := GetVersionFeature(m.Version).BatchItemLenSize
 	for i := 0; i < int(count); i++ {
-		if offset+2 > len(data) {
-			return fmt.Errorf("batch location: item %d length out of range", i)
+		var itemLen int
+		// JT/T 808-2011/2013: 位置项长度为1字节；JT/T 808-2019: 2字节
+		if itemLenSize == 1 {
+			if offset+1 > len(data) {
+				return fmt.Errorf("batch location: item %d length out of range", i)
+			}
+			itemLen = int(data[offset])
+			offset += 1
+		} else {
+			if offset+2 > len(data) {
+				return fmt.Errorf("batch location: item %d length out of range", i)
+			}
+			itemLen = int(binary.BigEndian.Uint16(data[offset : offset+2]))
+			offset += 2
 		}
-		// JT/T 808-2019: 位置项长度为2字节
-		itemLen := int(binary.BigEndian.Uint16(data[offset : offset+2]))
-		offset += 2
 		if offset+itemLen > len(data) {
 			return fmt.Errorf("batch location: item %d data too short", i)
 		}
@@ -457,7 +489,9 @@ func (m *CommandRespMessage) Marshal() ([]byte, error) {
 	binary.BigEndian.PutUint16(seq, m.RespSeqNum)
 	buf = append(buf, seq...)
 	buf = append(buf, m.Result)
-	buf = append(buf, m.ParamCount)
+	// 参数数量以 len(Params) 为准：Params 为空则不写参数段，
+	// 避免 ParamCount 与实际参数列表不一致产出矛盾报文
+	buf = append(buf, byte(len(m.Params)))
 	for _, id := range m.Params {
 		idBytes := make([]byte, 4)
 		binary.BigEndian.PutUint32(idBytes, id)
@@ -778,20 +812,26 @@ func (m *CircularAreaSetMessage) Marshal() ([]byte, error) {
 	buf = append(buf, attrBytes...)
 
 	latBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(latBytes, uint32(m.CenterLat*CoordScaleFactor))
+	binary.BigEndian.PutUint32(latBytes, encodeAreaCoord(m.CenterLat))
 	buf = append(buf, latBytes...)
 
 	lonBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(lonBytes, uint32(m.CenterLon*CoordScaleFactor))
+	binary.BigEndian.PutUint32(lonBytes, encodeAreaCoord(m.CenterLon))
 	buf = append(buf, lonBytes...)
 
 	rBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(rBytes, m.Radius)
 	buf = append(buf, rBytes...)
 
-	startBCD, _ := StringToBCD(m.StartTime, 3)
+	startBCD, err := StringToBCD(m.StartTime, 3)
+	if err != nil {
+		return nil, fmt.Errorf("encode circular area start time: %w", err)
+	}
 	buf = append(buf, startBCD...)
-	endBCD, _ := StringToBCD(m.EndTime, 3)
+	endBCD, err := StringToBCD(m.EndTime, 3)
+	if err != nil {
+		return nil, fmt.Errorf("encode circular area end time: %w", err)
+	}
 	buf = append(buf, endBCD...)
 
 	if m.Attr&0x02 != 0 {
@@ -848,24 +888,30 @@ func (m *RectAreaSetMessage) Marshal() ([]byte, error) {
 	buf = append(buf, attrBytes...)
 
 	ulLat := make([]byte, 4)
-	binary.BigEndian.PutUint32(ulLat, uint32(m.UpperLat*CoordScaleFactor))
+	binary.BigEndian.PutUint32(ulLat, encodeAreaCoord(m.UpperLat))
 	buf = append(buf, ulLat...)
 
 	ulLon := make([]byte, 4)
-	binary.BigEndian.PutUint32(ulLon, uint32(m.UpperLon*CoordScaleFactor))
+	binary.BigEndian.PutUint32(ulLon, encodeAreaCoord(m.UpperLon))
 	buf = append(buf, ulLon...)
 
 	llLat := make([]byte, 4)
-	binary.BigEndian.PutUint32(llLat, uint32(m.LowerLat*CoordScaleFactor))
+	binary.BigEndian.PutUint32(llLat, encodeAreaCoord(m.LowerLat))
 	buf = append(buf, llLat...)
 
 	llLon := make([]byte, 4)
-	binary.BigEndian.PutUint32(llLon, uint32(m.LowerLon*CoordScaleFactor))
+	binary.BigEndian.PutUint32(llLon, encodeAreaCoord(m.LowerLon))
 	buf = append(buf, llLon...)
 
-	startBCD, _ := StringToBCD(m.StartTime, 3)
+	startBCD, err := StringToBCD(m.StartTime, 3)
+	if err != nil {
+		return nil, fmt.Errorf("encode rect area start time: %w", err)
+	}
 	buf = append(buf, startBCD...)
-	endBCD, _ := StringToBCD(m.EndTime, 3)
+	endBCD, err := StringToBCD(m.EndTime, 3)
+	if err != nil {
+		return nil, fmt.Errorf("encode rect area end time: %w", err)
+	}
 	buf = append(buf, endBCD...)
 
 	if m.Attr&0x02 != 0 {
@@ -1384,6 +1430,8 @@ func (m *FatigueDriveAlarmMessage) Unmarshal(data []byte) error {
 
 // ============================== 辅助函数 ==============================
 
-// unused import guard
-var _ = math.Abs
-var _ = strings.TrimRight
+// encodeAreaCoord 编码区域/路线坐标：部标区域字段为无符号uint32且无符号状态位，
+// 负数与 0x0200 的处理保持一致，取绝对值后乘以缩放因子
+func encodeAreaCoord(v float64) uint32 {
+	return uint32(math.Abs(v) * CoordScaleFactor)
+}
