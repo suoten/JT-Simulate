@@ -1,4 +1,4 @@
-.PHONY: build build-server build-desktop clean test run
+.PHONY: build build-server build-desktop clean test run docker-build docker-up docker-pull
 
 BINARY=jt-simulate
 BUILD_DIR=bin
@@ -28,6 +28,18 @@ clean:
 # 依赖
 deps:
 	go mod tidy
+
+# Docker 镜像构建（国内网络加 IMAGE_MIRROR，如：make docker-build IMAGE_MIRROR=docker.m.daocloud.io/）
+docker-build:
+	docker build --build-arg IMAGE_MIRROR=$(or $(IMAGE_MIRROR),) -t jt-simulate .
+
+# Docker 一键部署（构建并启动，访问 http://localhost:8095）
+docker-up:
+	IMAGE_MIRROR=$(or $(IMAGE_MIRROR),) docker compose up -d --build
+
+# 镜像多源自动拉取（加速器失效救急）：make docker-pull IMAGE=minio/minio:tag
+docker-pull:
+	./scripts/pull-image.sh $(IMAGE)
 
 # 跨平台构建
 build-all: build-windows build-linux build-mac

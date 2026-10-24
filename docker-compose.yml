@@ -1,0 +1,36 @@
+# JT-Simulate 一键 Docker 部署
+#
+# 使用（构建并启动，浏览器访问 http://<主机IP>:8095）：
+#   docker compose up -d --build
+#
+# 国内网络拉不动 golang/alpine 基础镜像时，用镜像源前缀构建：
+#   IMAGE_MIRROR=docker.m.daocloud.io/ docker compose up -d --build
+#   （Windows PowerShell：$env:IMAGE_MIRROR="docker.m.daocloud.io/"; docker compose up -d --build）
+#
+# 说明：
+#   - 配置挂载 ./configs（只读）：改 config.yaml 后 docker compose restart 生效。
+#     若修改了 server.port，请同步修改下面的端口映射。
+#   - 数据挂载 ./data：设备列表持久化，升级镜像不丢数据。
+
+services:
+  jt-simulate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 镜像源前缀（留空 = 直连 Docker Hub），也可写入同目录 .env 文件
+        IMAGE_MIRROR: ${IMAGE_MIRROR:-}
+    image: jt-simulate:latest
+    container_name: jt-simulate
+    restart: unless-stopped
+    ports:
+      - "${JT_SIMULATE_PORT:-8095}:8095"
+    volumes:
+      - ./data:/app/data
+      - ./configs:/app/configs:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8095/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

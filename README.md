@@ -33,7 +33,7 @@
 
 ---
 
-## 快速开始（三种方式，总有一种适合你）
+## 快速开始（四种方式，总有一种适合你）
 
 ### 方式一：直接下载发布包（推荐，零门槛）
 
@@ -87,6 +87,43 @@ wails build -platform windows/amd64
 ### 方式三：打包发布（开发者用）
 
 如果你要自己打包发布版本，用 `make-release.ps1` 脚本，详见下方[打包脚本](#打包脚本-make-releaseps1)章节。
+
+### 方式四：Docker 部署（服务器推荐）
+
+```bash
+git clone <repo-url>
+cd JT-Simulate
+
+# 一键构建并启动（自动带健康检查、数据持久化）
+docker compose up -d --build
+
+# 浏览器访问
+http://localhost:8095
+```
+
+**国内网络拉不动 golang/alpine 基础镜像时**，加镜像源前缀构建，不用改任何文件：
+
+```bash
+# Linux / macOS
+IMAGE_MIRROR=docker.m.daocloud.io/ docker compose up -d --build
+
+# Windows PowerShell
+$env:IMAGE_MIRROR="docker.m.daocloud.io/"; docker compose up -d --build
+```
+
+- 配置：编辑挂载的 `configs/config.yaml`，改完 `docker compose restart` 生效
+- 数据：设备列表持久化在挂载的 `data/` 目录，升级镜像不丢数据
+- 改端口：`JT_SIMULATE_PORT=9000 docker compose up -d`（注意同步修改 config.yaml 的 `server.port`）
+
+**任意镜像拉取救急**：遇到加速器抽风（如 `failed size validation`、`timeout`），用仓库自带的多源自动重试脚本，成功后自动 tag 回原名：
+
+```bash
+# Linux / macOS / Git Bash
+./scripts/pull-image.sh minio/minio:RELEASE.2024-07-16T15-48-33Z
+
+# Windows PowerShell
+.\scripts\pull-image.ps1 minio/minio:RELEASE.2024-07-16T15-48-33Z
+```
 
 ---
 
@@ -419,6 +456,13 @@ failed size validation: 1691 != 1321: failed precondition
 ```
 
 原因：国内很多公共镜像加速器已停止服务或被污染，返回的错误页被 containerd 当成镜像内容提交，校验时大小对不上。解决办法（按顺序试）：
+
+0. **先试自动救急脚本**（直接拉、失败自动换源重试并 tag 回原名）：
+   ```bash
+   ./scripts/pull-image.sh <镜像名:tag>          # Linux / macOS / Git Bash
+   .\scripts\pull-image.ps1 <镜像名:tag>         # Windows PowerShell
+   ```
+   本项目自己的镜像构建则直接用：`IMAGE_MIRROR=docker.m.daocloud.io/ docker compose up -d --build`
 
 1. 换可用的加速器。Docker Desktop → Settings → Docker Engine 修改 `registry-mirrors`（也可用阿里云控制台的个人专属加速地址，最稳定）：
    ```json

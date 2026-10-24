@@ -37,3 +37,9 @@ docs/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Frontend deps
+node_modules/
+
+# 原子写备份残留
+data/*.bak
