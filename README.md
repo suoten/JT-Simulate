@@ -406,9 +406,35 @@ A：设备配置默认持久化到 `data/devices.json` 文件，重启后自动�
 
 **Q：如何启用 HTTPS？**
 A：在配置文件中设置 `server.cert_file` 和 `server.key_file` 指向你的 TLS 证书和私钥文件即可。未设置时默认使用 HTTP。
-2011
+
 **Q：生产环境如何配置 API 认证？**
 A：设置环境变量 `JT_SIMULATE_TOKEN` 为你的自定义 token。服务模式下所有 API 请求需要在 `Authorization` 头中携带 `Bearer <token>`。WebSocket 连接通过查询参数 `?token=<token>` 认证。桌面模式（127.0.0.1）自动跳过认证。
+
+**Q：Docker 构建镜像 / 拉取基础镜像时报 `failed size validation: 1691 != 1321: failed precondition`？**
+A：这不是项目问题，是 Docker 镜像加速器返回了脏数据。典型报错：
+
+```
+Error response from daemon: failed commit on ref "unknown-sha256:...": 
+failed size validation: 1691 != 1321: failed precondition
+```
+
+原因：国内很多公共镜像加速器已停止服务或被污染，返回的错误页被 containerd 当成镜像内容提交，校验时大小对不上。解决办法（按顺序试）：
+
+1. 换可用的加速器。Docker Desktop → Settings → Docker Engine 修改 `registry-mirrors`（也可用阿里云控制台的个人专属加速地址，最稳定）：
+   ```json
+   {
+     "registry-mirrors": ["https://docker.1ms.run", "https://docker.m.daocloud.io"]
+   }
+   ```
+   改完 Apply & Restart 再重试。
+2. 还报同样的 sha256 错 → 本地缓存了坏 blob：Docker Desktop → Troubleshoot → **Clean / Purge data** 后重拉；或 Settings → General 取消勾选 **Use containerd for pulling and storing images**（该校验是 containerd 存储特有的）。
+3. 临时绕过（不改配置）：从带前缀的可用源直接拉再改 tag：
+   ```bash
+   docker pull docker.m.daocloud.io/library/golang:1.25-alpine
+   docker tag  docker.m.daocloud.io/library/golang:1.25-alpine golang:1.25-alpine
+   ```
+
+如果机器上配了公司代理/系统代理，也请临时关闭代理直连试一次（代理篡改 registry 响应同样会导致此错）。
 
 ---
 
