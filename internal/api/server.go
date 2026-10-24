@@ -89,7 +89,8 @@ func (s *Server) StartWithTLS(host string, port int, mode string, frontendFS fs.
 
 	// 限流中间件（每秒最多 20 个请求，突发 50）
 	rl := newRateLimiter(20, 50)
-	go rl.cleanupLoop() // 后台清理过期 bucket
+	rlStop := make(chan struct{})
+	go rl.cleanupLoop(rlStop) // 后台清理过期 bucket（服务关闭时停止）
 	r.Use(rl.middleware())
 
 	// API路由
@@ -177,10 +178,16 @@ func (s *Server) StartWithTLS(host string, port int, mode string, frontendFS fs.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
+	signal.Stop(quit)
 	logger.Info("正在关闭服务...")
+
+	// 先关闭所有 WebSocket 连接：hijack 的连接不受 http.Server.Shutdown 影响，
+	// 且关闭后 Broadcast 变为 no-op，避免设备停止流程阻塞在慢客户端上
+	s.hub.Close()
 
 	// 停止所有设备
 	s.engine.StopAll()
+	close(rlStop)
 
 	// 优雅关闭 HTTP 服务（5秒超时）
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -318,10 +325,15 @@ func (rl *rateLimiter) middleware() gin.HandlerFunc {
 }
 
 // cleanupLoop 定期清理过期的 bucket（每 5 分钟，超过 10 分钟未访问的 IP 清除）
-func (rl *rateLimiter) cleanupLoop() {
+func (rl *rateLimiter) cleanupLoop(stop <-chan struct{}) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
 		rl.mu.Lock()
 		cutoff := time.Now().Add(-10 * time.Minute)
 		for ip, b := range rl.buckets {

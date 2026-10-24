@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 
 	"github.com/suoten/jt-simulate/internal/engine"
@@ -22,7 +21,6 @@ type Config struct {
 type Simulator struct {
 	engine   *engine.Engine
 	workshop *workshop.Workshop
-	mu       sync.Mutex
 }
 
 // New 创建仿真器
@@ -134,7 +132,7 @@ func (s *Simulator) RunScenario(name string) error {
 	for _, sc := range engine.DefaultScenarios() {
 		se.Register(sc)
 	}
-	return se.Run(nil, name, func(step *engine.ScenarioStep) error {
+	return se.Run(context.Background(), name, func(step *engine.ScenarioStep) error {
 		fmt.Printf("[场景] %s: %s\n", step.Name, step.Action)
 		return nil
 	})

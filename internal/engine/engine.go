@@ -24,7 +24,9 @@ type Simulator interface {
 	Offline()
 	Config() *base.DeviceConfig
 	State() base.DeviceState
-	SetOnState(func(base.DeviceState))
+	// TrySetState 原子状态迁移，用于并发启动保护
+	TrySetState(from, to base.DeviceState) bool
+	SetOnState(func(from, to base.DeviceState))
 	SetOnSend(func([]byte))
 	SetOnRawRecv(base.RawDataHandler)
 	WrapOnRawRecv(base.RawDataHandler)
@@ -37,6 +39,11 @@ type Engine struct {
 	stats     EngineStats
 	broadcast BroadcastFunc
 	storage   storage.Storage
+
+	// rootCtx 所有设备会话的父 context：设备不随单个 HTTP 请求结束而取消，
+	// 由 StopAll/进程关闭统一取消
+	rootCtx    context.Context
+	rootCancel context.CancelFunc
 }
 
 // DeviceInfo 设备信息
@@ -66,9 +73,12 @@ type EngineStats struct {
 // New 创建引擎
 func New() *Engine {
 	s := storage.New("data/devices.json")
+	rootCtx, rootCancel := context.WithCancel(context.Background())
 	return &Engine{
-		devices: make(map[string]*DeviceInfo),
-		storage: storage.NewDebounced(s, 2*time.Second),
+		devices:    make(map[string]*DeviceInfo),
+		storage:    storage.NewDebounced(s, 2*time.Second),
+		rootCtx:    rootCtx,
+		rootCancel: rootCancel,
 	}
 }
 
@@ -104,6 +114,7 @@ func (e *Engine) LoadDevices() error {
 		info.setState(base.StateOffline)
 		e.devices[cfg.ID] = info
 		e.mu.Unlock()
+		e.attachCallbacks(cfg.ID, info)
 		atomic.AddInt64(&e.stats.TotalDevices, 1)
 	}
 	if len(devices) > 0 {
@@ -154,14 +165,14 @@ func createSimulator(cfg *base.DeviceConfig) (Simulator, error) {
 // CreateDevice 创建设备
 func (e *Engine) CreateDevice(cfg *base.DeviceConfig) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if _, exists := e.devices[cfg.ID]; exists {
+		e.mu.Unlock()
 		return fmt.Errorf("device %s already exists", cfg.ID)
 	}
 
 	sim, err := createSimulator(cfg)
 	if err != nil {
+		e.mu.Unlock()
 		return err
 	}
 
@@ -171,6 +182,10 @@ func (e *Engine) CreateDevice(cfg *base.DeviceConfig) error {
 	}
 	info.setState(base.StateOffline)
 	e.devices[cfg.ID] = info
+	e.mu.Unlock()
+
+	e.attachCallbacks(cfg.ID, info)
+
 	atomic.AddInt64(&e.stats.TotalDevices, 1)
 
 	go e.SaveDevices()
@@ -179,40 +194,29 @@ func (e *Engine) CreateDevice(cfg *base.DeviceConfig) error {
 	return nil
 }
 
-// StartDevice 启动设备
-func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
-	e.mu.RLock()
-	info, ok := e.devices[deviceID]
-	e.mu.RUnlock()
+// attachCallbacks 为设备挂载引擎回调（在设备创建/加载时调用一次，切勿在每次启动时
+// 重复调用——WrapOnRawRecv 是追加语义，重复包装会导致下行帧被广播 N 次）
+func (e *Engine) attachCallbacks(deviceID string, info *DeviceInfo) {
+	sim := info.Simulator
+	// 缓存 phone/protocol 避免在回调闭包中反复访问 info.Config
+	phone := info.Config.Phone
+	protocol := info.Config.Protocol
 
-	if !ok {
-		return fmt.Errorf("device %s not found", deviceID)
-	}
-
-	if info.State() == base.StateOnline || info.State() == base.StateConnecting {
-		return fmt.Errorf("device %s is already running", deviceID)
-	}
-
-	sim := info.Simulator // Simulator 接口，不需要类型断言
-
-	// 设置回调——每次启动都重新设置，确保回调引用最新的引擎状态
-	deviceIDCopy := deviceID
-	sim.SetOnState(func(state base.DeviceState) {
-		info.setState(state)
-		if state == base.StateOnline {
+	sim.SetOnState(func(from, to base.DeviceState) {
+		info.setState(to)
+		// 边沿触发计数：只有 非Online→Online / Online→非Online 的迁移才增减在线数，
+		// 同一事件（如 Disconnect 的 Closing→Offline 与回调末尾的 Offline）不会重复扣减
+		if from != base.StateOnline && to == base.StateOnline {
 			atomic.AddInt64(&e.stats.OnlineDevices, 1)
-		} else if state == base.StateOffline {
+		} else if from == base.StateOnline && to != base.StateOnline {
 			cur := atomic.LoadInt64(&e.stats.OnlineDevices)
 			if cur > 0 {
 				atomic.AddInt64(&e.stats.OnlineDevices, -1)
 			}
 		}
-		logger.Debug("设备状态变更", "device_id", deviceIDCopy, "state", state.String())
+		logger.Debug("设备状态变更", "device_id", deviceID, "from", from.String(), "to", to.String())
 	})
 
-	// 缓存 phone 避免在回调闭包中反复访问 info.Config
-	phone := info.Config.Phone
-	protocol := info.Config.Protocol
 	sim.SetOnSend(func(data []byte) {
 		atomic.AddInt64(&e.stats.TotalMessages, 1)
 		e.mu.RLock()
@@ -251,12 +255,29 @@ func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
 			}
 		}
 	})
+}
+
+// StartDevice 启动设备
+// ctx 参数仅为接口兼容保留：设备实际挂在引擎 root ctx 下（不随 HTTP 请求结束而取消，
+// 避免心跳/位置上报在响应返回后被取消；引擎 StopAll 时统一停止）。
+func (e *Engine) StartDevice(ctx context.Context, deviceID string) error {
+	e.mu.RLock()
+	info, ok := e.devices[deviceID]
+	e.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("device %s not found", deviceID)
+	}
+
+	if info.State() == base.StateOnline || info.State() == base.StateConnecting {
+		return fmt.Errorf("device %s is already running", deviceID)
+	}
 
 	logger.Info("启动设备", "device_id", deviceID, "target", info.Config.TargetAddr)
-	// AUTO-FIX: 使用独立的后台 context，不随 HTTP 请求结束而取消
-	// 否则心跳和位置上报 goroutine 会在 HTTP 响应返回后被 cancel
-	deviceCtx := context.Background()
-	return sim.Online(deviceCtx)
+	e.mu.RLock()
+	rootCtx := e.rootCtx
+	e.mu.RUnlock()
+	return info.Simulator.Online(rootCtx)
 }
 
 // StopDevice 停止设备
@@ -295,11 +316,8 @@ func (e *Engine) DeleteDevice(deviceID string) error {
 	e.mu.Unlock()
 
 	if wasOnline {
+		// 在线数扣减由 onState 边沿回调完成，这里不再手动重复扣
 		sim.Offline()
-		cur := atomic.LoadInt64(&e.stats.OnlineDevices)
-		if cur > 0 {
-			atomic.AddInt64(&e.stats.OnlineDevices, -1)
-		}
 	}
 	atomic.AddInt64(&e.stats.TotalDevices, -1)
 
@@ -359,6 +377,15 @@ func (e *Engine) StopAll() {
 		})
 	}
 	e.mu.RUnlock()
+
+	// 先取消引擎 root ctx：所有设备会话（含重连循环）随之开始退出，
+	// 之后的 Offline 只需等待收尾，避免等待期间设备再次重连
+	e.mu.Lock()
+	if e.rootCancel != nil {
+		e.rootCancel()
+	}
+	e.rootCtx, e.rootCancel = context.WithCancel(context.Background())
+	e.mu.Unlock()
 
 	// 释放锁后再停止设备，避免死锁
 	count := 0

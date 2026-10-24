@@ -29,15 +29,72 @@ func New(cfg *base.DeviceConfig) *Simulator {
 	}
 	// 设置原始数据接收处理器——自动应答平台下发消息
 	s.SetOnRawRecv(s.handlePlatformMessage)
+	// 设置帧分割器：接收循环用它做 TCP 粘包/半包重组，只把完整帧交给 handlePlatformMessage
+	s.SetFrameSplitter(splitFrames808)
 	return s
 }
 
-// Online 上线（注册→等待应答→鉴权→心跳→位置上报），带自动重连
+// splitFrames808 按 0x7E 分隔符从累计缓冲中提取完整帧（含首尾分隔符），
+// 返回需要保留的残缺尾部长度（跨 TCP 分片的帧等待后续数据补齐）。
+func splitFrames808(buf []byte) ([][]byte, int) {
+	var frames [][]byte
+	start := -1
+	for i := 0; i < len(buf); i++ {
+		if buf[i] != 0x7E {
+			continue
+		}
+		if start == -1 {
+			start = i
+			continue
+		}
+		frameLen := i - start + 1
+		if frameLen > 2 && frameLen <= jt808.MaxFrameSize {
+			frame := make([]byte, frameLen)
+			copy(frame, buf[start:i+1])
+			frames = append(frames, frame)
+		}
+		start = i
+	}
+	if start == -1 {
+		// 无分隔符的脏数据，全部丢弃
+		return frames, 0
+	}
+	return frames, len(buf) - start
+}
+
+// drainRegResp 排空残留的注册应答，避免上次会话超时未消费的应答
+// 在重启后被立即读到（陈旧鉴权码）
+func (s *Simulator) drainRegResp() {
+	for {
+		select {
+		case <-s.regRespCh:
+			continue
+		default:
+		}
+		return
+	}
+}
+
+// Online 上线（注册→等待应答→鉴权→心跳→位置上报），带自动重连。
+// 原子迁移 Offline→Connecting 防止并发双启动；任何失败都会彻底清理连接与 goroutine。
 func (s *Simulator) Online(ctx context.Context) error {
+	if !s.Simulator.TrySetState(base.StateOffline, base.StateConnecting) {
+		return fmt.Errorf("device %s is already running", s.Config().Phone)
+	}
+	if err := s.online(ctx); err != nil {
+		// 失败路径彻底清理，避免残留连接/goroutine 而状态却显示在线
+		s.Simulator.Disconnect()
+		return err
+	}
+	return nil
+}
+
+func (s *Simulator) online(ctx context.Context) error {
 	if err := s.Connect(ctx); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
 
+	s.drainRegResp()
 	if err := s.sendRegister(); err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
@@ -54,8 +111,8 @@ func (s *Simulator) Online(ctx context.Context) error {
 	case <-time.After(5 * time.Second):
 		// 超时后仍尝试鉴权（有些平台不回复注册应答直接通过）
 		logger.Warn("等待注册应答超时，继续尝试鉴权", "phone", s.Config().Phone)
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-s.Context().Done():
+		return fmt.Errorf("disconnected while waiting register response: %w", s.Context().Err())
 	}
 
 	// 发送鉴权
@@ -63,22 +120,26 @@ func (s *Simulator) Online(ctx context.Context) error {
 		return fmt.Errorf("auth: %w", err)
 	}
 
-	// 启动心跳（使用内部可取消的 ctx，确保 Disconnect 能停止所有 goroutine）
-	internalCtx := s.Context()
-	s.StartHeartbeat(internalCtx, s.sendHeartbeat)
+	// 启动心跳（挂在当前连接的 ctx 上：断线即停，重连后由重连回调重启）
+	connCtx := s.Context()
+	s.StartHeartbeat(connCtx, s.sendHeartbeat)
 
 	// 启动定时位置上报
-	s.StartLocationReport(internalCtx, s.sendLocation)
+	s.StartLocationReport(connCtx, s.sendLocation)
 
 	// 启动自动重连
-	s.StartReconnectLoop(internalCtx, func(ctx context.Context) error {
-		// 重连后重新注册+鉴权
+	s.StartReconnectLoop(func(ctx context.Context) error {
+		// 重连后重新注册+鉴权（ctx 为新连接的 ctx）
+		s.drainRegResp()
 		if err := s.sendRegister(); err != nil {
 			return err
 		}
 		// 等待注册应答
 		select {
 		case resp := <-s.regRespCh:
+			if resp.Result != 0 {
+				return fmt.Errorf("register rejected by platform: result=%d", resp.Result)
+			}
 			if resp.AuthCode != "" {
 				s.SetAuthCode(resp.AuthCode)
 			}
@@ -103,12 +164,15 @@ func (s *Simulator) Offline() {
 	s.Disconnect()
 }
 
-// handlePlatformMessage 处理平台下发的消息并自动应答
+// handlePlatformMessage 处理平台下发的消息并自动应答。
+// 入参 data 已由接收循环的帧分割器（splitFrames808）保证是完整帧；
+// 广播包装层仍可能传入未经重组的数据块，这里做兼容切分。
 func (s *Simulator) handlePlatformMessage(data []byte) {
-	// 按分隔符切分可能的多帧
-	frames := jt808.SplitByDelimiter(data)
-	if len(frames) == 0 {
+	var frames [][]byte
+	if len(data) > 1 && data[0] == 0x7E && data[len(data)-1] == 0x7E {
 		frames = [][]byte{data}
+	} else {
+		frames = jt808.SplitByDelimiter(data)
 	}
 
 	for _, frame := range frames {

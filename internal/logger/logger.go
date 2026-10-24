@@ -3,27 +3,29 @@ package logger
 import (
 	"log/slog"
 	"os"
-	"sync"
+	"sync/atomic"
 )
 
-var (
-	defaultLogger *slog.Logger
-	once          sync.Once
-)
+// defaultLogger 全局 logger（原子读写：SetLogger 与 L 可能并发调用）
+var defaultLogger atomic.Pointer[slog.Logger]
+
+func init() {
+	defaultLogger.Store(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
+}
 
 // L 返回全局 logger
 func L() *slog.Logger {
-	once.Do(func() {
-		defaultLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
-		}))
-	})
-	return defaultLogger
+	return defaultLogger.Load()
 }
 
 // SetLogger 设置全局 logger
 func SetLogger(l *slog.Logger) {
-	defaultLogger = l
+	if l == nil {
+		return
+	}
+	defaultLogger.Store(l)
 }
 
 // Info Info级别日志

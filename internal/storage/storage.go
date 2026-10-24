@@ -109,11 +109,15 @@ func (s *JSONStorage) writeBackup(data []byte) {
 	_ = os.WriteFile(s.path+".bak", data, 0644)
 }
 
-// writeBackupToMain 异步将备份数据写回主文件（独立获取锁）
+// writeBackupToMain 异步将备份数据写回主文件（与 SaveDevices 相同的 tmp+rename 原子写）
 func (s *JSONStorage) writeBackupToMain(data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_ = os.WriteFile(s.path, data, 0644)
+	tmpPath := s.path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return
+	}
+	_ = os.Rename(tmpPath, s.path)
 }
 
 // Clear 清空存储
@@ -136,6 +140,9 @@ type debouncedStorage struct {
 	pending  []*base.DeviceConfig
 	delay    time.Duration
 	flushing bool
+	// writeMu 串行化对 inner 的实际写入（flush 与 Flush 两条路径共用），
+	// 保证"先拿走的新数据不会先落盘、后落盘的旧数据覆盖新数据"
+	writeMu sync.Mutex
 }
 
 // NewDebounced 包装一个 Storage，添加防抖功能
@@ -165,30 +172,44 @@ func (d *debouncedStorage) SaveDevices(devices []*base.DeviceConfig) error {
 	return nil
 }
 
-// flush 执行实际保存
+// flush 执行实际保存（循环直到无新挂起的变更：
+// 若一次写盘期间又发生了新的保存，继续写出最新数据，避免变更被无限期搁置）
 func (d *debouncedStorage) flush() {
-	d.mu.Lock()
-	if d.flushing || d.pending == nil {
+	for {
+		d.mu.Lock()
+		if d.flushing || d.pending == nil {
+			d.mu.Unlock()
+			return
+		}
+		devices := d.pending
+		d.pending = nil
+		d.flushing = true
 		d.mu.Unlock()
-		return
-	}
-	devices := d.pending
-	d.pending = nil
-	d.flushing = true
-	d.mu.Unlock()
 
-	if err := d.inner.SaveDevices(devices); err != nil {
-		logger.Error("防抖保存设备失败", "error", err)
-	}
+		d.writeMu.Lock()
+		err := d.inner.SaveDevices(devices)
+		d.writeMu.Unlock()
+		if err != nil {
+			logger.Error("防抖保存设备失败", "error", err)
+		}
 
-	d.mu.Lock()
-	d.flushing = false
-	d.mu.Unlock()
+		d.mu.Lock()
+		d.flushing = false
+		more := d.pending != nil
+		d.mu.Unlock()
+		if !more {
+			return
+		}
+	}
 }
 
 // Flush 立即执行挂起的保存
 func (d *debouncedStorage) Flush() error {
 	d.mu.Lock()
+	if d.timer != nil {
+		d.timer.Stop()
+		d.timer = nil
+	}
 	if d.pending == nil {
 		d.mu.Unlock()
 		return nil
@@ -197,6 +218,8 @@ func (d *debouncedStorage) Flush() error {
 	d.pending = nil
 	d.mu.Unlock()
 
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 	return d.inner.SaveDevices(devices)
 }
 

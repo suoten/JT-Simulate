@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/suoten/jt-simulate/pkg/codec/jt808"
@@ -38,6 +39,9 @@ type FuzzCaseResult struct {
 // Fuzzer Fuzz测试器
 type Fuzzer struct {
 	codec *jt808.JT808Codec
+	// rand.Rand 非并发安全：多个并发 /check/fuzz 请求会竞争内部状态，
+	// 用锁保护（Handler 全程持有单个 Fuzzer 实例）
+	rngMu sync.Mutex
 	rng   *rand.Rand
 }
 
@@ -110,6 +114,8 @@ func (f *Fuzzer) GenerateCases() []FuzzCase {
 
 // Run 执行Fuzz测试
 func (f *Fuzzer) Run() *FuzzResult {
+	f.rngMu.Lock()
+	defer f.rngMu.Unlock()
 	cases := f.GenerateCases()
 	result := &FuzzResult{TotalCases: len(cases)}
 

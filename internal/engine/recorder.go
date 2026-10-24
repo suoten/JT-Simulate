@@ -125,11 +125,10 @@ type Player struct {
 func NewPlayer(rec *Recording) *Player {
 	return &Player{
 		recording: rec,
-		cancel:    make(chan struct{}),
 	}
 }
 
-// Play 回放消息
+// Play 回放消息（可被 Stop 中断；同一 Player 可多次 Play）
 func (p *Player) Play(handler func(msg *RecordedMessage)) error {
 	p.mu.Lock()
 	if p.playing {
@@ -137,11 +136,16 @@ func (p *Player) Play(handler func(msg *RecordedMessage)) error {
 		return fmt.Errorf("already playing")
 	}
 	p.playing = true
+	// 每次播放使用新的取消通道：Stop 关闭的是本次播放的通道，
+	// 播放结束后 Player 可再次复用
+	cancel := make(chan struct{})
+	p.cancel = cancel
 	p.mu.Unlock()
 
 	defer func() {
 		p.mu.Lock()
 		p.playing = false
+		p.cancel = nil
 		p.mu.Unlock()
 	}()
 
@@ -153,15 +157,19 @@ func (p *Player) Play(handler func(msg *RecordedMessage)) error {
 
 	for _, msg := range p.recording.Messages {
 		select {
-		case <-p.cancel:
+		case <-cancel:
 			return nil
 		default:
 		}
 
-		// 等待到消息的时间
+		// 等待到消息的时间（可被 Stop 打断，避免长时间等待无法停止）
 		delay := time.Duration(msg.Timestamp-baseTime) * time.Millisecond
 		if delay > 0 {
-			time.Sleep(delay)
+			select {
+			case <-cancel:
+				return nil
+			case <-time.After(delay):
+			}
 		}
 
 		handler(&msg)
@@ -175,7 +183,7 @@ func (p *Player) Play(handler func(msg *RecordedMessage)) error {
 func (p *Player) Stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.playing {
+	if p.playing && p.cancel != nil {
 		close(p.cancel)
 	}
 }

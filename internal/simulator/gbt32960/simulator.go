@@ -24,8 +24,20 @@ func New(cfg *base.DeviceConfig) *Simulator {
 	return s
 }
 
-// Online 上线（车辆登入→心跳→实时数据上报），带自动重连
+// Online 上线（车辆登入→心跳→实时数据上报），带自动重连。
+// 原子迁移 Offline→Connecting 防止并发双启动；任何失败都会彻底清理连接与 goroutine。
 func (s *Simulator) Online(ctx context.Context) error {
+	if !s.Simulator.TrySetState(base.StateOffline, base.StateConnecting) {
+		return fmt.Errorf("device %s is already running", s.Config().Phone)
+	}
+	if err := s.online(ctx); err != nil {
+		s.Simulator.Disconnect()
+		return err
+	}
+	return nil
+}
+
+func (s *Simulator) online(ctx context.Context) error {
 	if err := s.Connect(ctx); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
@@ -34,15 +46,15 @@ func (s *Simulator) Online(ctx context.Context) error {
 		return fmt.Errorf("vehicle login: %w", err)
 	}
 
-	// 启动心跳（使用内部可取消的 ctx，确保 Disconnect 能停止所有 goroutine）
-	internalCtx := s.Context()
-	s.StartHeartbeat(internalCtx, s.sendHeartbeat)
+	// 启动心跳（挂在当前连接的 ctx 上：断线即停，重连后由重连回调重启）
+	connCtx := s.Context()
+	s.StartHeartbeat(connCtx, s.sendHeartbeat)
 
 	// 启动定时实时数据上报
-	s.StartLocationReport(internalCtx, s.sendRealtimeInfo)
+	s.StartLocationReport(connCtx, s.sendRealtimeInfo)
 
-	// 启动自动重连
-	s.StartReconnectLoop(internalCtx, func(ctx context.Context) error {
+	// 启动自动重连（回调收到的 ctx 为新连接的 ctx）
+	s.StartReconnectLoop(func(ctx context.Context) error {
 		if err := s.sendLogin(); err != nil {
 			return err
 		}
@@ -110,7 +122,7 @@ func (s *Simulator) sendRealtimeInfo() error {
 
 	vehData := &gbt32960.VehicleData{
 		Status: 0x01, ChargeStatus: 0x01, Mode: 0x01,
-		Speed:         uint16(s.CurSpeed()),
+		Speed:         uint16(s.CurSpeed() * 10), // 单位 0.1km/h
 		TotalMileage:  100000,
 		Voltage:       35000,
 		Current:       5000,
@@ -120,18 +132,19 @@ func (s *Simulator) sendRealtimeInfo() error {
 		Resistance:    500,
 	}
 	posData := &gbt32960.PositionData{
-		ChargeStatus: 0x01,
-		Lat:          int32(s.CurLat() * 1000000),
-		Lon:          int32(s.CurLon() * 1000000),
-		Altitude:     500,
-		Direction:    s.CurDir(),
-		Speed:        uint16(s.CurSpeed()),
+		LocStatus: 0x00, // 有效定位、北纬、东经
+		Lat:       int32(s.CurLat() * 1000000),
+		Lon:       int32(s.CurLon() * 1000000),
+		Altitude:  500,
+		Direction: s.CurDir(),
+		Speed:     uint16(s.CurSpeed() * 10), // 单位 0.1km/h
 	}
 	items := []gbt32960.RealtimeDataItem{
 		{Type: gbt32960.DataItemVehicle, Data: gbt32960.EncodeVehicleData(vehData)},
 		{Type: gbt32960.DataItemPosition, Data: gbt32960.EncodePositionData(posData)},
 	}
-	data := gbt32960.EncodeRealtimeInfo(vin, now, 1, items)
+	// 报文序号按标准递增（每条实时信息上报加 1）
+	data := gbt32960.EncodeRealtimeInfo(vin, now, s.NextSeqNum(), items)
 	return s.Send(data)
 }
 

@@ -51,8 +51,17 @@ func NewStressEngine() *StressEngine {
 
 // Run 运行压测
 func (e *StressEngine) Run(ctx context.Context, cfg *StressConfig) (*StressResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	ctx, cancel := context.WithCancel(ctx)
+	// 原子占用运行标记：防止并发 Run 双跑、cancel 被覆盖导致第一次压测无法停止
 	e.mu.Lock()
+	if e.running {
+		e.mu.Unlock()
+		cancel()
+		return nil, fmt.Errorf("stress test already running")
+	}
 	e.running = true
 	e.cancel = cancel
 	e.msgCount = 0
@@ -69,7 +78,9 @@ func (e *StressEngine) Run(ctx context.Context, cfg *StressConfig) (*StressResul
 		StartTime:   time.Now(),
 		TotalDevices: int64(cfg.DeviceCount),
 	}
+	e.mu.Lock()
 	e.result = result
+	e.mu.Unlock()
 
 	protocol := cfg.Protocol
 	if protocol == "" {

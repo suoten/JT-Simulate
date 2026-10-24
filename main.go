@@ -135,8 +135,13 @@ func runDesktop(cmd *cobra.Command, args []string) {
 	// 启动 Wails 桌面窗口
 	if err := runWailsDesktop(serverURL, frontendFS); err != nil {
 		fmt.Fprintf(os.Stderr, "桌面应用启动失败: %v\n", err)
+		eng.StopAll() // 窗口已关，停止设备并落盘持久化
 		os.Exit(1)
 	}
+
+	// 窗口关闭后优雅清理：停止所有设备、把防抖窗口内的变更落盘
+	// （HTTP 服务 goroutine 依赖信号退出，桌面模式收不到，随进程一起结束）
+	eng.StopAll()
 }
 
 // runServer 运行 Web 服务

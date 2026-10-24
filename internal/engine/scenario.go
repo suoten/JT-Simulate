@@ -33,14 +33,12 @@ type ScenarioEngine struct {
 	cancel       context.CancelFunc
 	currentStep  int
 	totalSteps   int
-	stepProgress chan string // 步骤名称
 }
 
 // NewScenarioEngine 创建场景引擎
 func NewScenarioEngine() *ScenarioEngine {
 	return &ScenarioEngine{
-		scenarios:    make(map[string]*Scenario),
-		stepProgress: make(chan string, 64),
+		scenarios: make(map[string]*Scenario),
 	}
 }
 
@@ -86,13 +84,22 @@ func (e *ScenarioEngine) Get(name string) (*Scenario, error) {
 
 // Run 执行场景
 func (e *ScenarioEngine) Run(ctx context.Context, name string, stepHandler func(step *ScenarioStep) error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s, err := e.Get(name)
 	if err != nil {
 		return err
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
+	// 原子占用运行标记：防止并发 Run 导致 cancel 被覆盖、第一个场景无法停止
 	e.mu.Lock()
+	if e.running {
+		e.mu.Unlock()
+		cancel()
+		return fmt.Errorf("scenario already running: %s", e.runningName)
+	}
 	e.running = true
 	e.runningName = s.Name
 	e.cancel = cancel
