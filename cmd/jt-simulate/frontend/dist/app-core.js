@@ -1,5 +1,5 @@
 // JT-Simulate Frontend JS v7 - Core
-var API='/api/v1',ws=null,monitorMsgs=[],dashTimer=null,devTimer=null,stressTimer=null,scenarioTimer=null;
+var API='/api/v1',ws=null,monitorMsgs=[],dashTimer=null,devTimer=null,stressTimer=null,scenarioTimer=null,trajTimer=null;
 
 // === Token 管理（服务模式认证）===
 var AUTH_TOKEN=null;
@@ -101,12 +101,13 @@ function showPage(n,el){
     if(devTimer){clearInterval(devTimer);devTimer=null;}
     if(stressTimer){clearInterval(stressTimer);stressTimer=null;}
     if(typeof scenarioTimer!=='undefined'&&scenarioTimer){clearInterval(scenarioTimer);scenarioTimer=null;}
+    if(typeof trajTimer!=='undefined'&&trajTimer){clearInterval(trajTimer);trajTimer=null;}
     if(n!=='monitor'&&ws){ws.close();ws=null;}
     document.querySelectorAll('.page').forEach(function(e){e.classList.add('hidden');});
     document.getElementById('page-'+n).classList.remove('hidden');
     document.querySelectorAll('.nav-item').forEach(function(e){e.classList.remove('active');});
     if(el)el.classList.add('active');
-    var fn={dashboard:renderDashboard,workshop:renderWorkshop,devices:renderDevices,monitor:renderMonitor,stress:renderStress,scenario:renderScenario,checker:renderChecker,settings:renderSettings};
+    var fn={dashboard:renderDashboard,workshop:renderWorkshop,devices:renderDevices,monitor:renderMonitor,stress:renderStress,scenario:renderScenario,trajectory:renderTrajectory,checker:renderChecker,settings:renderSettings};
     if(fn[n])fn[n]();
 }
 

@@ -27,7 +27,8 @@ type Server struct {
 	engine   *engine.Engine
 	workshop *workshop.Workshop
 	hub      *websocket.Hub
-	apiToken string // API 认证 token（桌面模式为空，跳过认证）
+	handler  *handler.Handler // StartWithTLS 中创建，优雅关停时用于停止后台任务
+	apiToken string           // API 认证 token（桌面模式为空，跳过认证）
 }
 
 // NewServer 创建服务器
@@ -95,6 +96,7 @@ func (s *Server) StartWithTLS(host string, port int, mode string, frontendFS fs.
 
 	// API路由
 	h := handler.New(s.engine, s.workshop)
+	s.handler = h
 	h.RegisterRoutes(r)
 
 	// WebSocket（支持 token 查询参数认证）
@@ -185,7 +187,10 @@ func (s *Server) StartWithTLS(host string, port int, mode string, frontendFS fs.
 	// 且关闭后 Broadcast 变为 no-op，避免设备停止流程阻塞在慢客户端上
 	s.hub.Close()
 
-	// 停止所有设备
+	// 停止轨迹回放会话，再停止所有设备
+	if s.handler != nil {
+		s.handler.Shutdown()
+	}
 	s.engine.StopAll()
 	close(rlStop)
 
@@ -208,13 +213,21 @@ func (s *Server) Hub() *websocket.Hub {
 
 // handleWSAuth 处理 WebSocket 连接的 token 认证
 // 桌面模式（apiToken 为空）直接放行
-// 服务模式通过查询参数 ?token=xxx 认证（WebSocket 无法设置自定义 Header）
+// 服务模式通过查询参数 ?token=xxx 认证（WebSocket 无法设置自定义 Header）；
+// 本机访问免认证，与 authMiddleware 的本机豁免保持一致（前端在 127.0.0.1 下
+// 判定为桌面模式不发 token，否则服务模式经 localhost 打开时监控始终 401）
 func (s *Server) handleWSAuth(c *gin.Context) {
 	if s.apiToken != "" {
-		token := c.Query("token")
-		if subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) != 1 {
-			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "WebSocket 认证失败"})
-			return
+		remoteAddr := c.Request.RemoteAddr
+		isLocal := strings.HasPrefix(remoteAddr, "127.0.0.1:") ||
+			strings.HasPrefix(remoteAddr, "[::1]:") ||
+			strings.HasPrefix(remoteAddr, "localhost:")
+		if !isLocal {
+			token := c.Query("token")
+			if subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) != 1 {
+				c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "WebSocket 认证失败"})
+				return
+			}
 		}
 	}
 	s.hub.HandleWS(c.Writer, c.Request)

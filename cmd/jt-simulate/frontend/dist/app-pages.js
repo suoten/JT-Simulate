@@ -234,7 +234,7 @@ function clearMonitor(){monitorMsgs=[];var list=document.getElementById('monitor
 function renderMonitorMsg(msg){
     var list=document.getElementById('monitor-list');if(!list)return;
     var dir=msg.direction==='up'?'<span style="color:#4fc3f7">[UP]</span>':'<span style="color:#81c784">[DOWN]</span>';
-    var time=new Date(msg.timestamp*1000).toLocaleTimeString();
+    var time=escH(msg.time||''); // hub 下发的 time 为 "15:04:05.000" 格式化字符串
     var hex=(msg.hex||'').substring(0,80);
     var div=document.createElement('div');
     div.style.cssText='padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer';
@@ -341,6 +341,179 @@ async function updateScenarioStatus(){
             if(scenarioTimer){clearInterval(scenarioTimer);scenarioTimer=null;}
         }
     }catch(e){}
+}
+
+// ==================== 轨迹回放 ====================
+var trajRoutes=[],trajDevices=[],trajSessions=[];
+var TRAJ808=['jt808','jt1078','jt905','jt1045','jt1253'];
+
+function renderTrajectory(){
+    document.getElementById('page-trajectory').innerHTML=
+        '<h2 class="page-title">轨迹回放</h2>'+
+        '<div class="card guide-card"><div style="display:flex;align-items:flex-start;gap:12px"><div style="flex-shrink:0;color:var(--accent)">'+icon('info','card-icon')+'</div><div><div style="color:var(--accent);font-size:13px;font-weight:600;margin-bottom:6px">使用指南</div><div style="color:var(--text-muted);font-size:12px;line-height:1.8">1. 上传轨迹文件：支持 GPX（&lt;trkpt&gt;）或文本格式（每行：<code style="color:var(--accent)">纬度,经度[,速度km/h][,时间]</code>，时间支持秒偏移 / HH:MM:SS / 日期时间，# 开头为注释）<br>2. 在「设备管理」创建并<b style="color:var(--warning)">启动</b>一台 JT808 系协议设备（轨迹回放按上报间隔自动发送 0x0200 位置报文）<br>3. 选择设备与轨迹，配置上报间隔、回放模式、循环后点击「开始回放」<br>4. 在「消息监控」页面实时查看 0x0200 报文中动态变化的经纬度、速度、方向</div></div></div></div>'+
+        '<div class="grid-2">'+
+        '<div class="card"><h3>'+icon('save')+'轨迹文件</h3>'+
+        '<div class="form-group"><label>选择文件（.gpx / .txt / .csv，≤20MB）</label><input type="file" id="traj-file" accept=".gpx,.txt,.csv,text/plain,application/gpx+xml" style="width:100%"></div>'+
+        '<div class="form-group"><label>轨迹名称 <span style="color:var(--text-dim);text-transform:none;font-weight:400">（留空用文件名）</span></label><input type="text" id="traj-name" placeholder="如：示例-北京环路"></div>'+
+        '<button class="btn btn-primary" id="traj-upload-btn" onclick="uploadTraj()">'+btnIcon('save')+'上传轨迹</button>'+
+        '<h3 style="margin-top:20px">'+icon('chart')+'已保存轨迹 <button class="btn btn-sm" onclick="loadTrajRoutes()" style="margin-left:8px">'+btnIcon('refresh')+'刷新</button></h3>'+
+        '<div id="traj-route-list"><p style="color:#888">加载中...</p></div></div>'+
+        '<div class="card"><h3>'+icon('activity')+'回放控制</h3>'+
+        '<div class="grid-2"><div class="form-group"><label>绑定终端（需在线）</label><select id="traj-device"></select></div>'+
+        '<div class="form-group"><label>轨迹</label><select id="traj-route" onchange="onTrajRouteChange()"></select></div></div>'+
+        '<div id="traj-route-meta" style="color:#8b92a8;font-size:12px;margin:-6px 0 10px"></div>'+
+        '<div class="grid-2"><div class="form-group"><label>上报间隔(秒)</label><input type="number" id="traj-interval" value="5" min="1" max="3600"></div>'+
+        '<div class="form-group"><label>回放模式</label><select id="traj-mode"><option value="uniform">匀速推进（按模拟车速）</option><option value="timeline">按时间回放（需轨迹含时间）</option></select></div></div>'+
+        '<div class="grid-2"><div class="form-group"><label>模拟车速(km/h) <span style="color:var(--text-dim);text-transform:none;font-weight:400">匀速模式</span></label><input type="number" id="traj-speed" value="40" min="1" max="500"></div>'+
+        '<div class="form-group"><label>时间倍速 <span style="color:var(--text-dim);text-transform:none;font-weight:400">时间模式</span></label><input type="number" id="traj-factor" value="1" min="0.1" step="0.1"></div></div>'+
+        '<div class="form-group"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="traj-loop" checked> 循环回放（到终点后回到起点继续）</label></div>'+
+        '<button class="btn btn-primary" id="traj-start-btn" onclick="startTraj()">'+btnIcon('play')+'开始回放</button> '+
+        '<button class="btn btn-danger" onclick="stopTrajAll()">'+btnIcon('stop')+'停止全部</button></div>'+
+        '</div>'+
+        '<div class="card" style="margin-top:16px"><h3>'+icon('network')+'回放状态</h3><div id="traj-status"><p style="color:#888">加载中...</p></div></div>';
+    loadTrajRoutes();
+    loadTrajDevices();
+    updateTrajStatus();
+    trajTimer=setInterval(updateTrajStatus,2000);
+}
+async function loadTrajRoutes(){
+    try{
+        var r=await _fetch(API+'/trajectory/routes'),d=await r.json();
+        trajRoutes=d.routes||[];
+        var list=document.getElementById('traj-route-list');if(!list)return;
+        if(trajRoutes.length===0){list.innerHTML='<div class="empty-state">'+icon('empty','empty-icon')+'<p>暂无轨迹，请先上传</p></div>';}
+        else{
+            var h='<table><thead><tr><th>名称</th><th>点数</th><th>距离</th><th>时长</th><th>格式</th><th>操作</th></tr></thead><tbody>';
+            trajRoutes.forEach(function(rt,i){
+                h+='<tr><td>'+escH(rt.name)+'</td><td>'+rt.point_count+'</td><td>'+(rt.total_distance_m/1000).toFixed(2)+'km</td><td>'+(rt.has_time?fmtDur(rt.duration_s):'-')+'</td><td>'+escH(rt.source)+'</td><td><button class="btn btn-sm btn-danger" onclick="delTrajRoute('+i+')">'+btnIcon('trash')+'</button></td></tr>';
+            });
+            list.innerHTML=h+'</tbody></table>';
+        }
+        fillTrajRouteSelect();
+    }catch(e){var el=document.getElementById('traj-route-list');if(el)el.innerHTML='<p style="color:#ef5350">加载失败</p>';}
+}
+function fillTrajRouteSelect(){
+    var sel=document.getElementById('traj-route');if(!sel)return;
+    var prev=sel.value;
+    sel.innerHTML=trajRoutes.length===0?'<option value="">（请先上传轨迹）</option>':trajRoutes.map(function(rt){return '<option value="'+escH(rt.name)+'">'+escH(rt.name)+'</option>';}).join('');
+    if(prev&&trajRoutes.some(function(rt){return rt.name===prev;}))sel.value=prev;
+    onTrajRouteChange();
+}
+function onTrajRouteChange(){
+    var sel=document.getElementById('traj-route'),meta=document.getElementById('traj-route-meta');if(!sel||!meta)return;
+    var rt=trajRoutes.find(function(r){return r.name===sel.value;});
+    var modeSel=document.getElementById('traj-mode');
+    if(modeSel){
+        var opt=modeSel.querySelector('option[value=timeline]');
+        if(opt){opt.disabled=!rt||!rt.has_time;}
+        if(sel.value===''||modeSel.selectedIndex<0){modeSel.value='uniform';}
+        if(opt&&opt.disabled&&modeSel.value==='timeline')modeSel.value='uniform';
+    }
+    if(!rt){meta.textContent='';return;}
+    meta.textContent='共 '+rt.point_count+' 个点，全长 '+(rt.total_distance_m/1000).toFixed(2)+' km'+(rt.has_time?'，录制时长 '+fmtDur(rt.duration_s)+'（可按时间回放）':'（无时间信息，仅支持匀速推进）');
+}
+async function uploadTraj(){
+    var input=document.getElementById('traj-file');
+    if(!input||!input.files||!input.files.length){toast('请选择轨迹文件','error');return;}
+    var btn=document.getElementById('traj-upload-btn');btn.disabled=true;
+    try{
+        var fd=new FormData();
+        fd.append('file',input.files[0]);
+        var name=document.getElementById('traj-name').value;
+        if(name)fd.append('name',name);
+        var r=await _fetch(API+'/trajectory/upload',{method:'POST',body:fd}),d=await r.json();
+        if(d.success){
+            toast('轨迹已导入: '+d.name+'（'+d.point_count+' 点，'+(d.total_distance_m/1000).toFixed(2)+'km）','success');
+            input.value='';document.getElementById('traj-name').value='';
+            loadTrajRoutes();
+        }else toast(d.error||'上传失败','error');
+    }catch(e){toast('上传失败: '+e.message,'error');}
+    btn.disabled=false;
+}
+function delTrajRoute(i){
+    var rt=trajRoutes[i];if(!rt)return;
+    var overlay=document.createElement('div');
+    overlay.className='modal-overlay';
+    overlay.onclick=function(e){if(e.target===overlay)overlay.remove();};
+    overlay.innerHTML='<div class="modal-content" style="max-width:400px"><div class="modal-header"><h3>'+icon('warning')+'确认删除</h3></div><div class="modal-body"><p style="color:#ccc;font-size:14px">确定要删除轨迹 <b style="color:var(--accent)">'+escH(rt.name)+'</b> 吗？此操作不可撤销。</p></div><div class="modal-footer"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">取消</button> <button class="btn btn-danger" onclick="doDelTrajRoute('+i+');this.closest(\'.modal-overlay\').remove()">确认删除</button></div></div>';
+    document.body.appendChild(overlay);
+}
+async function doDelTrajRoute(i){
+    var rt=trajRoutes[i];if(!rt)return;
+    try{
+        var r=await _fetch(API+'/trajectory/routes/'+encodeURIComponent(rt.name),{method:'DELETE'}),d=await r.json();
+        if(d.success){toast('轨迹已删除','success');loadTrajRoutes();}
+        else toast(d.error||'删除失败','error');
+    }catch(e){toast('删除失败: '+e.message,'error');}
+}
+async function loadTrajDevices(){
+    try{
+        var r=await _fetch(API+'/devices'),d=await r.json();
+        trajDevices=(d.devices||[]).filter(function(dev){return TRAJ808.indexOf(dev.protocol)>=0;});
+        var sel=document.getElementById('traj-device');if(!sel)return;
+        var prev=sel.value;
+        sel.innerHTML=trajDevices.length===0?'<option value="">（无 JT808 系设备，请先在设备管理创建）</option>':trajDevices.map(function(dev){
+            var tag=dev.state==='online'?' [在线]':dev.state==='connecting'?' [连接中]':' [离线]';
+            return '<option value="'+escH(dev.id)+'">'+escH(dev.id)+'（'+escH(dev.phone)+'）'+tag+'</option>';
+        }).join('');
+        if(prev&&trajDevices.some(function(dev){return dev.id===prev;}))sel.value=prev;
+    }catch(e){}
+}
+async function startTraj(){
+    var dev=document.getElementById('traj-device'),route=document.getElementById('traj-route');
+    if(!dev.value){toast('请选择要绑定轨迹的设备','error');return;}
+    if(!route.value){toast('请选择轨迹','error');return;}
+    var cfg={device_id:dev.value,route_name:route.value,interval:parseInt(document.getElementById('traj-interval').value)||5,loop:document.getElementById('traj-loop').checked,mode:document.getElementById('traj-mode').value,speed:parseFloat(document.getElementById('traj-speed').value)||40,speed_factor:parseFloat(document.getElementById('traj-factor').value)||1};
+    try{
+        var r=await _fetch(API+'/trajectory/start',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:JSON.stringify(cfg)}),d=await r.json();
+        if(d.success){toast(d.message||'回放已启动','success');updateTrajStatus();}
+        else toast(d.error||'启动失败','error');
+    }catch(e){toast('请求失败: '+e.message,'error');}
+}
+async function stopTrajAll(){
+    try{
+        var r=await _fetch(API+'/trajectory/stop',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:'{}'}),d=await r.json();
+        if(d.success){toast(d.message||'已停止','success');updateTrajStatus();}
+        else toast(d.error||'停止失败','error');
+    }catch(e){toast('请求失败: '+e.message,'error');}
+}
+async function stopTrajSession(i){
+    var s=trajSessions[i];if(!s)return;
+    try{
+        var r=await _fetch(API+'/trajectory/stop',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:JSON.stringify({device_id:s.device_id})}),d=await r.json();
+        if(d.success){toast('已停止 '+s.device_id+' 的回放','success');updateTrajStatus();}
+        else toast(d.error||'停止失败','error');
+    }catch(e){toast('请求失败: '+e.message,'error');}
+}
+async function updateTrajStatus(){
+    try{
+        var r=await _fetch(API+'/trajectory/status'),d=await r.json();
+        trajSessions=d.sessions||[];
+        var el=document.getElementById('traj-status');if(!el)return;
+        if(!d.running||trajSessions.length===0){el.innerHTML='<p style="color:#888">未在回放。选择在线设备与轨迹后点击「开始回放」。</p>';return;}
+        var h='';
+        trajSessions.forEach(function(s,i){
+            var modeLabel=s.mode==='timeline'?'按时间回放（'+(s.speed_factor||1)+'x）':'匀速推进';
+            h+='<div style="border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:12px;margin-bottom:10px">';
+            h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap"><span class="dot" style="background:'+(s.waiting_device?'#ffb74d':'#4caf50')+';animation:pulse 1.5s infinite"></span><b style="color:#ccc">'+escH(s.device_id)+'</b><span style="color:#888;font-size:12px">'+escH(s.phone||'')+'</span><span class="badge '+(s.waiting_device?'badge-yellow':'badge-green')+'">'+(s.waiting_device?'等待设备上线':'回放中')+'</span><span style="color:#8b92a8;font-size:12px">'+escH(s.route_name)+' · '+modeLabel+' · '+s.interval+'s'+(s.loop?' · 循环':'')+'</span><span style="flex:1"></span><button class="btn btn-sm btn-danger" onclick="stopTrajSession('+i+')">'+btnIcon('stop')+'停止</button></div>';
+            h+='<div style="background:rgba(255,255,255,0.05);border-radius:4px;height:8px;overflow:hidden;margin:6px 0 10px"><div style="background:var(--accent);height:100%;width:'+(s.progress_percent||0)+'%;transition:width 0.3s"></div></div>';
+            h+='<div class="grid-2">'+
+                '<div class="stat-item"><div class="stat-label">当前位置</div><div class="stat-value" style="font-size:15px">'+(s.cur_lat||0).toFixed(5)+', '+(s.cur_lon||0).toFixed(5)+'</div></div>'+
+                '<div class="stat-item"><div class="stat-label">速度 / 方向</div><div class="stat-value" style="font-size:15px">'+(s.cur_speed_kmh||0).toFixed(1)+' km/h / '+(s.cur_dir||0)+'°</div></div>'+
+                '<div class="stat-item"><div class="stat-label">已发 0x0200</div><div class="stat-value">'+(s.points_sent||0)+' 条</div></div>'+
+                '<div class="stat-item"><div class="stat-label">回放圈数</div><div class="stat-value">'+(s.loops_done||0)+'</div></div>'+
+                '</div>';
+            h+='</div>';
+        });
+        h+='<p style="color:#8b92a8;font-size:12px">提示：到「消息监控」页面可实时查看回放产生的 0x0200 位置上报报文。</p>';
+        el.innerHTML=h;
+    }catch(e){}
+}
+function fmtDur(sec){
+    sec=Math.round(sec||0);
+    if(sec<60)return sec+'s';
+    if(sec<3600)return Math.floor(sec/60)+'m'+(sec%60?sec%60+'s':'');
+    return Math.floor(sec/3600)+'h'+Math.floor(sec%3600/60)+'m';
 }
 
 // ==================== 合规检查 ====================

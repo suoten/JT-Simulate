@@ -16,6 +16,7 @@
 | 验证报文是否符合协议规范 | 合规检查自动验证字段范围、格式等 |
 | 测试协议解析器健壮性 | Fuzz 测试自动生成各种异常报文 |
 | 模拟超速/疲劳/紧急报警等业务场景 | 场景模拟一键运行预置脚本 |
+| 模拟车辆连续行驶轨迹 | 导入 GPX/文本轨迹，位置上报沿轨迹动态推进（经纬度/速度/方向随轨迹变化），支持循环回放 |
 
 ---
 
@@ -196,7 +197,27 @@ $env:IMAGE_MIRROR="docker.m.daocloud.io/"; docker compose up -d --build
 3. 点「开始模拟」→ 进度条实时显示执行进度
 4. 点「停止模拟」可以随时中断
 
-### 7. 合规检查 + Fuzz 测试
+### 7. 轨迹回放 — 模拟车辆连续行驶
+
+导入真实轨迹文件，让仿真终端沿轨迹行驶，0x0200 位置报文中的经纬度、速度、方向随轨迹动态变化。
+
+**支持的轨迹格式：**
+- **GPX**：标准 `<trk><trkseg><trkpt lat lon><time>` 结构（含时间则可按时间回放）
+- **文本**：每行 `纬度,经度[,速度km/h][,时间]`，分隔符支持逗号/Tab/空格，`#` 开头为注释；时间支持秒偏移量、`HH:MM:SS`、`YYYY-MM-DD HH:MM:SS`
+
+**怎么用：**
+1. 在「轨迹回放」页上传轨迹文件（`data/routes/` 目录自带两个示例文件，可直接上传试用）
+2. 在「设备管理」创建并**启动**一台 JT808 系协议设备
+3. 回放页选择设备与轨迹，配置：
+   - 上报间隔（秒）
+   - 回放模式：匀速推进（按模拟车速）或 按时间回放（跟随轨迹时间轴，可倍速）
+   - 循环回放开关
+4. 点「开始回放」→ 实时显示进度、当前位置、速度、方向、已发报文数
+5. 到「消息监控」查看实时 0x0200 报文
+
+**说明：** 回放期间设备的默认周期位置上报会被暂停（由回放引擎接管 0x0200），停止回放后自动从轨迹当前位置恢复默认上报；设备断线时回放会暂停等待，重连后从断点继续。仅支持 JT808 系协议设备（GB/T 32960 暂不支持）。
+
+### 8. 合规检查 + Fuzz 测试
 
 **合规检查：** 验证报文是否符合协议规范
 1. 填写 JT/T 808 报文 Hex
@@ -360,6 +381,13 @@ jt-simulate version
 | POST | `/api/v1/scenarios/run` | 运行场景 |
 | POST | `/api/v1/scenarios/stop` | 停止场景 |
 | GET | `/api/v1/scenarios/status` | 场景状态 |
+| POST | `/api/v1/trajectory/upload` | 上传轨迹文件（multipart: file, name） |
+| GET | `/api/v1/trajectory/routes` | 获取轨迹列表 |
+| GET | `/api/v1/trajectory/routes/:name` | 获取轨迹详情（含点位） |
+| DELETE | `/api/v1/trajectory/routes/:name` | 删除轨迹 |
+| POST | `/api/v1/trajectory/start` | 开始回放（绑定设备与轨迹） |
+| POST | `/api/v1/trajectory/stop` | 停止回放（device_id 为空停全部） |
+| GET | `/api/v1/trajectory/status` | 回放状态 |
 | POST | `/api/v1/stress/run` | 启动压测 |
 | POST | `/api/v1/stress/stop` | 停止压测 |
 | GET | `/api/v1/stress/status` | 压测状态 |

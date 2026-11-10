@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="JT-Simulate" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>示例-北京环路</name>
+    <trkseg>
+      <trkpt lat="39.917300" lon="116.397400"><ele>45</ele><time>2026-01-01T08:00:00Z</time></trkpt>
+      <trkpt lat="39.916691" lon="116.401380"><ele>45</ele><time>2026-01-01T08:02:00Z</time></trkpt>
+      <trkpt lat="39.914957" lon="116.404754"><ele>45</ele><time>2026-01-01T08:04:00Z</time></trkpt>
+      <trkpt lat="39.912361" lon="116.407008"><ele>45</ele><time>2026-01-01T08:06:00Z</time></trkpt>
+      <trkpt lat="39.909300" lon="116.407800"><ele>45</ele><time>2026-01-01T08:08:00Z</time></trkpt>
+      <trkpt lat="39.906239" lon="116.407008"><ele>45</ele><time>2026-01-01T08:10:00Z</time></trkpt>
+      <trkpt lat="39.903643" lon="116.404754"><ele>45</ele><time>2026-01-01T08:12:00Z</time></trkpt>
+      <trkpt lat="39.901909" lon="116.401380"><ele>45</ele><time>2026-01-01T08:14:00Z</time></trkpt>
+      <trkpt lat="39.901300" lon="116.397400"><ele>45</ele><time>2026-01-01T08:16:00Z</time></trkpt>
+      <trkpt lat="39.901909" lon="116.393420"><ele>45</ele><time>2026-01-01T08:18:00Z</time></trkpt>
+      <trkpt lat="39.903643" lon="116.390046"><ele>45</ele><time>2026-01-01T08:20:00Z</time></trkpt>
+      <trkpt lat="39.906239" lon="116.387792"><ele>45</ele><time>2026-01-01T08:22:00Z</time></trkpt>
+      <trkpt lat="39.909300" lon="116.387000"><ele>45</ele><time>2026-01-01T08:24:00Z</time></trkpt>
+      <trkpt lat="39.912361" lon="116.387792"><ele>45</ele><time>2026-01-01T08:26:00Z</time></trkpt>
+      <trkpt lat="39.914957" lon="116.390046"><ele>45</ele><time>2026-01-01T08:28:00Z</time></trkpt>
+      <trkpt lat="39.916691" lon="116.393420"><ele>45</ele><time>2026-01-01T08:30:00Z</time></trkpt>
+      <trkpt lat="39.917300" lon="116.397400"><ele>45</ele><time>2026-01-01T08:32:00Z</time></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

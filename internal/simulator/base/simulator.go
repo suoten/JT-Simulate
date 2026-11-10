@@ -627,6 +627,15 @@ func (s *Simulator) SetSpeed(kmh float64) {
 	s.rt.curSpeed = kmh
 }
 
+// SetPosition 设置当前位置（轨迹回放用：外部按轨迹推进坐标，
+// 使 0x8201 位置查询应答与回放位置保持一致）
+func (s *Simulator) SetPosition(lat, lon float64) {
+	s.rt.mu.Lock()
+	defer s.rt.mu.Unlock()
+	s.rt.curLat = lat
+	s.rt.curLon = lon
+}
+
 // SetDirection 设置当前方向
 func (s *Simulator) SetDirection(dir uint16) {
 	s.rt.mu.Lock()

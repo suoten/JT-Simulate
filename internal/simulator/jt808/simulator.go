@@ -3,6 +3,7 @@ package jt808
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/suoten/jt-simulate/internal/logger"
@@ -18,6 +19,16 @@ type Simulator struct {
 
 	// 注册应答同步
 	regRespCh chan *jt808.RegisterRespMessage
+
+	// playbackActive 轨迹回放接管标记：置位期间抑制默认周期位置上报，
+	// 0x0200 由轨迹回放引擎按其自身间隔发送（心跳不受影响）。
+	// 挂在 Simulator 结构体上而非连接上，断线重连后依然生效。
+	playbackActive atomic.Bool
+}
+
+// SetPlaybackMode 开启/关闭轨迹回放接管模式
+func (s *Simulator) SetPlaybackMode(on bool) {
+	s.playbackActive.Store(on)
 }
 
 // New 创建JT808仿真器
@@ -406,6 +417,11 @@ func (s *Simulator) sendHeartbeat() error {
 
 // sendLocation 发送位置上报（沿路线移动）
 func (s *Simulator) sendLocation() error {
+	// 轨迹回放接管期间跳过默认上报，避免与回放引擎的双流竞争
+	if s.playbackActive.Load() {
+		return nil
+	}
+
 	cfg := s.Config()
 	// 沿路线移动
 	s.MoveAlongRoute()

@@ -14,6 +14,7 @@ import (
 	gbt32960sim "github.com/suoten/jt-simulate/internal/simulator/gbt32960"
 	jt808sim "github.com/suoten/jt-simulate/internal/simulator/jt808"
 	"github.com/suoten/jt-simulate/internal/simulator/base"
+	"github.com/suoten/jt-simulate/internal/trajectory"
 	"github.com/suoten/jt-simulate/internal/workshop"
 )
 
@@ -25,6 +26,8 @@ type Handler struct {
 	fuzzer         *checker.Fuzzer
 	scenarioEngine *engine.ScenarioEngine
 	stressEngine   *engine.StressEngine
+	trajEngine     *engine.TrajectoryEngine
+	trajStore      *trajectory.Store
 }
 
 // New 创建处理器
@@ -40,7 +43,14 @@ func New(e *engine.Engine, w *workshop.Workshop) *Handler {
 		fuzzer:         checker.NewFuzzer(),
 		scenarioEngine: se,
 		stressEngine:   engine.NewStressEngine(),
+		trajEngine:     engine.NewTrajectoryEngine(e.GetDevice),
+		trajStore:      trajectory.NewStore("data/routes"),
 	}
+}
+
+// Shutdown 停止处理器管理的后台任务（服务关闭时调用）
+func (h *Handler) Shutdown() {
+	h.trajEngine.StopAll()
 }
 
 // RegisterRoutes 注册路由
@@ -69,6 +79,15 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		api.POST("/scenarios/run", h.RunScenario)
 		api.POST("/scenarios/stop", h.StopScenario)
 		api.GET("/scenarios/status", h.ScenarioStatus)
+
+		// 轨迹回放
+		api.POST("/trajectory/upload", h.TrajectoryUpload)
+		api.GET("/trajectory/routes", h.ListTrajectoryRoutes)
+		api.GET("/trajectory/routes/:name", h.GetTrajectoryRoute)
+		api.DELETE("/trajectory/routes/:name", h.DeleteTrajectoryRoute)
+		api.POST("/trajectory/start", h.StartTrajectory)
+		api.POST("/trajectory/stop", h.StopTrajectory)
+		api.GET("/trajectory/status", h.TrajectoryStatus)
 
 		// 压测
 		api.POST("/stress/run", h.RunStress)
