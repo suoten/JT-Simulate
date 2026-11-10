@@ -1,4 +1,4 @@
-# JT-Simulate 发布打包脚本
+﻿# JT-Simulate 发布打包脚本
 # 用法: powershell -ExecutionPolicy Bypass -File make-release.ps1
 # 用法: powershell -ExecutionPolicy Bypass -File make-release.ps1 -Version 1.0.0
 # 产出: release/jt-simulate-<version>-<platform>.zip
