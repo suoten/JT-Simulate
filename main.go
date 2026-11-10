@@ -101,6 +101,10 @@ func setupLogger(cfg *config.LogConfig) {
 
 // runDesktop 启动 Wails 桌面应用（双击 exe 默认行为）
 func runDesktop(cmd *cobra.Command, args []string) {
+	// 先检测 WebView2 运行时：缺失时 wails 底层会静默退出（双击场景无任何提示），
+	// 这里主动弹窗引导安装
+	ensureWebView2Runtime()
+
 	// 桌面模式使用默认配置
 	cfg := config.DefaultConfig()
 	setupLogger(&cfg.Log)
@@ -134,7 +138,9 @@ func runDesktop(cmd *cobra.Command, args []string) {
 
 	// 启动 Wails 桌面窗口
 	if err := runWailsDesktop(serverURL, frontendFS); err != nil {
-		fmt.Fprintf(os.Stderr, "桌面应用启动失败: %v\n", err)
+		// 双击运行时 stderr 不可见，用消息框给出可见错误与替代启动方式
+		showErrorBox("JT-Simulate 桌面应用启动失败",
+			fmt.Sprintf("%v\n\n可尝试改用服务模式：\n在命令行运行 jt-simulate.exe serve -c configs/config.yaml，然后用浏览器访问提示的地址。", err))
 		eng.StopAll() // 窗口已关，停止设备并落盘持久化
 		os.Exit(1)
 	}
