@@ -265,6 +265,12 @@ func authMiddleware(token string) gin.HandlerFunc {
 			return
 		}
 
+		// 支持 ?token= 查询参数（下载链接等无法自定义 Header 的场景，与 WebSocket 认证一致）
+		if qt := c.Query("token"); qt != "" && subtle.ConstantTimeCompare([]byte(qt), []byte(token)) == 1 {
+			c.Next()
+			return
+		}
+
 		auth := c.GetHeader("Authorization")
 		if auth == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "缺少认证信息"})

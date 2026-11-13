@@ -129,6 +129,14 @@ function Package-Zip($tag, $binKey, $isWinHost) {
     # 复制 README
     if (Test-Path "README.md") { Copy-Item "README.md" "$pkgDir/README.md" -Force }
 
+    # 复制示例轨迹（data/routes 下的示例文件，运行时数据 *.json 不打包）
+    if (Test-Path "data/routes") {
+        Get-ChildItem "data/routes" -Filter "示例-*" | ForEach-Object {
+            New-Item -ItemType Directory -Path "$pkgDir/data/routes" -Force | Out-Null
+            Copy-Item $_.FullName "$pkgDir/data/routes/$($_.Name)" -Force
+        }
+    }
+
     # 打 zip 包
     $zipball = "release/jt-simulate-$Version-$tag.zip"
     Write-Host "  Creating $zipball..." -ForegroundColor DarkGray

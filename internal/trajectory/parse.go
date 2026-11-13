@@ -16,7 +16,7 @@ const MaxPoints = 100000
 // name 为轨迹名称（来源文件名或用户指定）。
 func Parse(name string, data []byte) (*Route, error) {
 	if len(data) == 0 {
-		return nil, fmt.Errorf("文件内容为空")
+		return nil, fmt.Errorf("文件内容为空（0 字节）：请确认文件里已保存轨迹内容——右键新建的空文本文档、下载不完整的文件都会出现此提示，可先右键文件查看属性确认大小，或使用「轨迹文件」卡片中的示例轨迹下载链接")
 	}
 	head := string(data[:min(len(data), 512)])
 	lower := strings.ToLower(head)

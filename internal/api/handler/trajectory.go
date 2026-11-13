@@ -3,6 +3,9 @@ package handler
 import (
 	"io"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -201,4 +204,35 @@ func trajSummary(r *trajectory.Route) gin.H {
 		"duration_s":       r.DurationS,
 		"has_time":         r.HasTime,
 	}
+}
+
+// sampleFiles 内置示例轨迹（与仓库 data/routes 中的示例文件一致，随发布包分发）
+var sampleFiles = map[string]string{
+	"示例-北京环路.gpx":  "application/gpx+xml",
+	"示例-长安街直线.txt": "text/plain; charset=utf-8",
+}
+
+// TrajectorySample 下载内置示例轨迹文件（供「轨迹回放」页的一键下载链接使用）
+func (h *Handler) TrajectorySample(c *gin.Context) {
+	name := c.Param("name")
+	ct, ok := sampleFiles[name]
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "示例轨迹不存在"})
+		return
+	}
+	path := filepath.Join("data", "routes", name)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "示例文件缺失（data/routes/ 中未找到 " + name + "），请从仓库下载：https://gitee.com/suoten/jt-simulate/blob/master/data/routes",
+		})
+		return
+	}
+	// ASCII 回退名 + RFC 5987 编码的原始名，兼顾不支持 filename* 的旧下载器
+	ext := filepath.Ext(name)
+	fallback := "sample" + ext
+	c.Header("Content-Disposition",
+		`attachment; filename="`+fallback+`"; filename*=UTF-8''`+url.PathEscape(name))
+	c.Data(http.StatusOK, ct, data)
 }

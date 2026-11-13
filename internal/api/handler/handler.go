@@ -85,6 +85,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		api.GET("/trajectory/routes", h.ListTrajectoryRoutes)
 		api.GET("/trajectory/routes/:name", h.GetTrajectoryRoute)
 		api.DELETE("/trajectory/routes/:name", h.DeleteTrajectoryRoute)
+		api.GET("/trajectory/samples/:name", h.TrajectorySample)
 		api.POST("/trajectory/start", h.StartTrajectory)
 		api.POST("/trajectory/stop", h.StopTrajectory)
 		api.GET("/trajectory/status", h.TrajectoryStatus)

@@ -356,6 +356,7 @@ function renderTrajectory(){
         '<div class="form-group"><label>选择文件（.gpx / .txt / .csv，≤20MB）</label><input type="file" id="traj-file" accept=".gpx,.txt,.csv,text/plain,application/gpx+xml" style="width:100%"></div>'+
         '<div class="form-group"><label>轨迹名称 <span style="color:var(--text-dim);text-transform:none;font-weight:400">（留空用文件名）</span></label><input type="text" id="traj-name" placeholder="如：示例-北京环路"></div>'+
         '<button class="btn btn-primary" id="traj-upload-btn" onclick="uploadTraj()">'+btnIcon('save')+'上传轨迹</button>'+
+        '<div style="margin-top:10px;color:var(--text-muted);font-size:12px">没有轨迹文件？下载示例：<a href="'+API+'/trajectory/samples/'+encodeURIComponent('示例-北京环路.gpx')+'" download style="color:var(--accent)">示例-北京环路.gpx</a> · <a href="'+API+'/trajectory/samples/'+encodeURIComponent('示例-长安街直线.txt')+'" download style="color:var(--accent)">示例-长安街直线.txt</a></div>'+
         '<h3 style="margin-top:20px">'+icon('chart')+'已保存轨迹 <button class="btn btn-sm" onclick="loadTrajRoutes()" style="margin-left:8px">'+btnIcon('refresh')+'刷新</button></h3>'+
         '<div id="traj-route-list"><p style="color:#888">加载中...</p></div></div>'+
         '<div class="card"><h3>'+icon('activity')+'回放控制</h3>'+
@@ -415,6 +416,7 @@ function onTrajRouteChange(){
 async function uploadTraj(){
     var input=document.getElementById('traj-file');
     if(!input||!input.files||!input.files.length){toast('请选择轨迹文件','error');return;}
+    if(input.files[0].size===0){toast('选中的文件是空的（0 字节）：请先确认文件里已保存轨迹内容再上传（可右键文件→属性查看大小），或点击下方「下载示例」获取现成轨迹文件','error');return;}
     var btn=document.getElementById('traj-upload-btn');btn.disabled=true;
     try{
         var fd=new FormData();
