@@ -356,7 +356,7 @@ function renderTrajectory(){
         '<div class="form-group"><label>选择文件（.gpx / .txt / .csv，≤20MB）</label><input type="file" id="traj-file" accept=".gpx,.txt,.csv,text/plain,application/gpx+xml" style="width:100%"></div>'+
         '<div class="form-group"><label>轨迹名称 <span style="color:var(--text-dim);text-transform:none;font-weight:400">（留空用文件名）</span></label><input type="text" id="traj-name" placeholder="如：示例-北京环路"></div>'+
         '<button class="btn btn-primary" id="traj-upload-btn" onclick="uploadTraj()">'+btnIcon('save')+'上传轨迹</button>'+
-        '<div style="margin-top:10px;color:var(--text-muted);font-size:12px">没有轨迹文件？下载示例：<a href="'+API+'/trajectory/samples/'+encodeURIComponent('示例-北京环路.gpx')+'" download style="color:var(--accent)">示例-北京环路.gpx</a> · <a href="'+API+'/trajectory/samples/'+encodeURIComponent('示例-长安街直线.txt')+'" download style="color:var(--accent)">示例-长安街直线.txt</a></div>'+
+        '<div style="margin-top:10px;color:var(--text-muted);font-size:12px">没有轨迹文件？下载示例：<a href="'+API+'/trajectory/samples/beijing-loop" download style="color:var(--accent)">示例-北京环路.gpx</a> · <a href="'+API+'/trajectory/samples/changan-jie" download style="color:var(--accent)">示例-长安街直线.txt</a></div>'+
         '<h3 style="margin-top:20px">'+icon('chart')+'已保存轨迹 <button class="btn btn-sm" onclick="loadTrajRoutes()" style="margin-left:8px">'+btnIcon('refresh')+'刷新</button></h3>'+
         '<div id="traj-route-list"><p style="color:#888">加载中...</p></div></div>'+
         '<div class="card"><h3>'+icon('activity')+'回放控制</h3>'+

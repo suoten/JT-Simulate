@@ -129,11 +129,17 @@ function Package-Zip($tag, $binKey, $isWinHost) {
     # 复制 README
     if (Test-Path "README.md") { Copy-Item "README.md" "$pkgDir/README.md" -Force }
 
-    # 复制示例轨迹（data/routes 下的示例文件，运行时数据 *.json 不打包）
-    if (Test-Path "data/routes") {
-        Get-ChildItem "data/routes" -Filter "示例-*" | ForEach-Object {
-            New-Item -ItemType Directory -Path "$pkgDir/data/routes" -Force | Out-Null
-            Copy-Item $_.FullName "$pkgDir/data/routes/$($_.Name)" -Force
+    # 复制示例轨迹（ASCII 文件名入包：Compress-Archive 以系统 ANSI 写中文文件名，
+    # 在 Git Bash/Linux/macOS 解压会乱码；示例下载端点按候选名同时兼容两种名字）
+    $sampleMap = @{
+        "data/routes/示例-北京环路.gpx"  = "data/routes/sample-beijing-loop.gpx"
+        "data/routes/示例-长安街直线.txt" = "data/routes/sample-changanjie.txt"
+    }
+    foreach ($src in $sampleMap.Keys) {
+        if (Test-Path $src) {
+            $dst = Join-Path $pkgDir $sampleMap[$src]
+            New-Item -ItemType Directory -Path (Split-Path -Parent $dst) -Force | Out-Null
+            Copy-Item $src $dst -Force
         }
     }
 

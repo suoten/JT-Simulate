@@ -206,33 +206,53 @@ func trajSummary(r *trajectory.Route) gin.H {
 	}
 }
 
-// sampleFiles 内置示例轨迹（与仓库 data/routes 中的示例文件一致，随发布包分发）
-var sampleFiles = map[string]string{
-	"示例-北京环路.gpx":  "application/gpx+xml",
-	"示例-长安街直线.txt": "text/plain; charset=utf-8",
+// trajSample 内置示例轨迹定义
+type trajSample struct {
+	ContentType  string   // 响应 Content-Type
+	Candidates   []string // 磁盘上的候选文件名（仓库中文名 + 发布包 ASCII 名，取首个存在的）
+	DownloadName string   // Content-Disposition filename*（浏览器保存的中文名）
+}
+
+// sampleFiles 内置示例轨迹（与仓库 data/routes 中的示例文件一致，随发布包分发）。
+// URL 标识用 ASCII，避免中文路径在 zip/URL/下载器中的编码问题。
+var sampleFiles = map[string]trajSample{
+	"beijing-loop": {
+		ContentType:  "application/gpx+xml",
+		Candidates:   []string{"示例-北京环路.gpx", "sample-beijing-loop.gpx"},
+		DownloadName: "示例-北京环路.gpx",
+	},
+	"changan-jie": {
+		ContentType:  "text/plain; charset=utf-8",
+		Candidates:   []string{"示例-长安街直线.txt", "sample-changanjie.txt"},
+		DownloadName: "示例-长安街直线.txt",
+	},
 }
 
 // TrajectorySample 下载内置示例轨迹文件（供「轨迹回放」页的一键下载链接使用）
 func (h *Handler) TrajectorySample(c *gin.Context) {
-	name := c.Param("name")
-	ct, ok := sampleFiles[name]
+	id := c.Param("name")
+	s, ok := sampleFiles[id]
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "示例轨迹不存在"})
 		return
 	}
-	path := filepath.Join("data", "routes", name)
-	data, err := os.ReadFile(path)
+	var data []byte
+	var err error
+	for _, name := range s.Candidates {
+		if data, err = os.ReadFile(filepath.Join("data", "routes", name)); err == nil {
+			break
+		}
+	}
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
-			"error":   "示例文件缺失（data/routes/ 中未找到 " + name + "），请从仓库下载：https://gitee.com/suoten/jt-simulate/blob/master/data/routes",
+			"error":   "示例文件缺失（data/routes/ 中未找到示例文件），请从仓库下载：https://gitee.com/suoten/jt-simulate/blob/master/data/routes",
 		})
 		return
 	}
 	// ASCII 回退名 + RFC 5987 编码的原始名，兼顾不支持 filename* 的旧下载器
-	ext := filepath.Ext(name)
-	fallback := "sample" + ext
+	fallback := "sample" + filepath.Ext(s.DownloadName)
 	c.Header("Content-Disposition",
-		`attachment; filename="`+fallback+`"; filename*=UTF-8''`+url.PathEscape(name))
-	c.Data(http.StatusOK, ct, data)
+		`attachment; filename="`+fallback+`"; filename*=UTF-8''`+url.PathEscape(s.DownloadName))
+	c.Data(http.StatusOK, s.ContentType, data)
 }
